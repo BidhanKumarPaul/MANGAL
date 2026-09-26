@@ -2,30 +2,34 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Audio capture for on-device whisper.cpp & openWakeWord -->
+    <!-- Audio capture for on-device whisper.cpp & hands-free "Mangal" wake word -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Initial Wi-Fi model download ONLY; unused during 100% offline runtime inference -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Local Tool Action Permissions (Requested strictly on-demand via runtime flow) -->
+    <!--
+      PLAY PROTECT COMPLIANCE NOTE:
+      We intentionally omit restricted SEND_SMS, CALL_PHONE, and SCHEDULE_EXACT_ALARM
+      permissions that trigger Google Play Protect "Harmful App / Toll Fraud" warnings on
+      non-default handlers. Instead, SMS, calls, and alarms use verified system intents
+      (ACTION_SENDTO smsto:, ACTION_DIAL tel:, and SET_ALARM) or optional CalendarContract.
+    -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
-    <uses-permission android:name="android.permission.SEND_SMS" />
-    <uses-permission android:name="android.permission.CALL_PHONE" />
 
     <!-- Hardware feature declarations (non-blocking for Wi-Fi tablets without telephony/flash) -->
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
-    <!-- Package visibility for opening apps, alarms, and search intents on Android 11+ (API 30+) -->
+    <!-- Package visibility for opening apps, alarms, SMS/Dialer, and search on Android 11+ (API 30+) -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -38,15 +42,27 @@
             <action android:name="android.intent.action.SET_TIMER" />
         </intent>
         <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.WEB_SEARCH" />
         </intent>
     </queries>
 
     <application
         android:name=".MangalApplication"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false"
         android:label="MANGAL"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar"
@@ -59,7 +75,16 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <!-- Supports Android Digital Assistant long-press home gesture -->
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- Hands-Free "Mangal" Wake Word Service with explicit microphone foregroundServiceType -->
+        <service
+            android:name=".service.MangalWakeWordForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
     </application>
 </manifest>

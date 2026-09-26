@@ -24,8 +24,8 @@ android {
         applicationId = "ai.mangal.assistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.0.0-release"
+        versionCode = 7
+        versionName = "1.1.0-playprotect-safe"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -49,6 +49,12 @@ android {
                 keyPassword = keystoreProperties.getProperty("keyPassword")
                     ?: System.getenv("MANGAL_KEY_PASSWORD")
             }
+            // Enable APK Signature Schemes v1, v2, v3, and v4 so Google Play Protect
+            // cryptographic integrity verification passes without warnings.
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+            enableV4Signing = true
         }
     }
 
@@ -80,7 +86,10 @@ android {
     }
     packaging {
         jniLibs {
-            useLegacyPackaging = true
+            // Play Protect & Android 15 (16KB page size) compliance:
+            // Keep native .so libraries page-aligned and uncompressed inside the signed APK
+            // so PackageManager verifies their signatures at install time.
+            useLegacyPackaging = false
         }
     }
 }

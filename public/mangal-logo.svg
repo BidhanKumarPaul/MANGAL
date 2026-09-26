@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <radialGradient id="mangalGlow" cx="50%" cy="44%" r="38%" fx="50%" fy="44%">
+      <stop offset="0%" stop-color="#9A5B22" stop-opacity="0.92" />
+      <stop offset="52%" stop-color="#4B290C" stop-opacity="0.55" />
+      <stop offset="100%" stop-color="#120E0A" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <!-- Deep Obsidian Canvas -->
+  <rect width="512" height="512" rx="96" fill="#120E0A" />
+  <!-- Warm Amber-Bronze Halo Glow -->
+  <circle cx="256" cy="225" r="195" fill="url(#mangalGlow)" />
+
+  <!-- Outer Acoustic Wave Arcs -->
+  <path d="M123 102 C62 158 62 272 123 328" stroke="#9A9183" stroke-width="11" stroke-linecap="round" />
+  <path d="M389 102 C450 158 450 272 389 328" stroke="#9A9183" stroke-width="11" stroke-linecap="round" />
+
+  <!-- Middle Acoustic Wave Arcs -->
+  <path d="M156 132 C108 175 108 255 156 298" stroke="#CFC5B4" stroke-width="11" stroke-linecap="round" />
+  <path d="M356 132 C404 175 404 255 356 298" stroke="#CFC5B4" stroke-width="11" stroke-linecap="round" />
+
+  <!-- Inner Acoustic Wave Arcs -->
+  <path d="M192 165 C166 190 166 240 192 265" stroke="#EFE6D5" stroke-width="11" stroke-linecap="round" />
+  <path d="M320 165 C346 190 346 240 320 265" stroke="#EFE6D5" stroke-width="11" stroke-linecap="round" />
+
+  <!-- Central Capsule Microphone Body -->
+  <rect x="216" y="132" width="80" height="148" rx="40" fill="#EFE6D5" />
+
+  <!-- Microphone Stand & Base -->
+  <path d="M201 286 C214 316 234 328 256 328 C278 328 298 316 311 286" stroke="#EFE6D5" stroke-width="11" stroke-linecap="round" />
+  <line x1="256" y1="302" x2="256" y2="332" stroke="#EFE6D5" stroke-width="11" />
+  <line x1="218" y1="332" x2="294" y2="332" stroke="#EFE6D5" stroke-width="11" />
+
+  <!-- M A N G A L Wordmark -->
+  <text x="256" y="452" text-anchor="middle" fill="#BDB3A3" font-family="Georgia, 'Times New Roman', serif" font-size="34" font-weight="bold" letter-spacing="14">MANGAL</text>
+</svg>

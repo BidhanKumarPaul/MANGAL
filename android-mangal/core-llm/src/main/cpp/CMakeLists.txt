@@ -8,6 +8,9 @@ if(${ANDROID_ABI} STREQUAL "arm64-v8a")
     add_compile_options(-march=armv8.2-a+dotprod+fp16 -O3)
 endif()
 
+# Android 15 (API 35) & Play Protect 16KB ELF Page Alignment
+add_link_options(-Wl,-z,max-page-size=16384)
+
 add_library(mangal_llama_jni SHARED
     llama_jni.cpp
 )

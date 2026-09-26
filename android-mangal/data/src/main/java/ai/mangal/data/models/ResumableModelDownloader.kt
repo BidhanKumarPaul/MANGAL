@@ -151,6 +151,11 @@ class ResumableModelDownloader @Inject constructor(
 
             if (finalFile.exists()) finalFile.delete()
             partFile.renameTo(finalFile)
+            // Play Protect Dynamic Code Loading (DCL) Hardening:
+            // Mark downloaded model weight files strictly non-executable and read-only.
+            finalFile.setExecutable(false, false)
+            finalFile.setWritable(false, false)
+            finalFile.setReadable(true, true)
 
             modelDao.upsertModel(model.copy(localFilePath = finalFile.absolutePath))
             updateState(

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Central cream/ivory capsule microphone (#EFE6D5) -->
+    <path
+        android:fillColor="#EFE6D5"
+        android:pathData="M54,28 C58.97,28 63,32.03 63,37 L63,51 C63,55.97 58.97,60 54,60 C49.03,60 45,55.97 45,51 L45,37 C45,32.03 49.03,28 54,28 Z" />
+
+    <!-- Microphone U-cradle and base stand -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M41,56 C43,63.5 48,67 54,67 C60,67 65,63.5 67,56"
+        android:strokeWidth="2.4"
+        android:strokeColor="#EFE6D5"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,61 L54,68 M45,68 L63,68"
+        android:strokeWidth="2.4"
+        android:strokeColor="#EFE6D5"
+        android:strokeLineCap="square" />
+
+    <!-- Inner acoustic wave arcs (Left & Right) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M40,37 C36.5,40 36.5,48 40,51"
+        android:strokeWidth="2.2"
+        android:strokeColor="#EFE6D5"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M68,37 C71.5,40 71.5,48 68,51"
+        android:strokeWidth="2.2"
+        android:strokeColor="#EFE6D5"
+        android:strokeLineCap="round" />
+
+    <!-- Middle acoustic wave arcs (Left & Right) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M33.5,31 C27.5,37.5 27.5,50.5 33.5,57"
+        android:strokeWidth="2.2"
+        android:strokeColor="#D5CBB8"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M74.5,31 C80.5,37.5 80.5,50.5 74.5,57"
+        android:strokeWidth="2.2"
+        android:strokeColor="#D5CBB8"
+        android:strokeLineCap="round" />
+
+    <!-- Outer acoustic wave arcs (Left & Right) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M27,25 C18.5,34.5 18.5,53.5 27,63"
+        android:strokeWidth="2.2"
+        android:strokeColor="#9E9585"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M81,25 C89.5,34.5 89.5,53.5 81,63"
+        android:strokeWidth="2.2"
+        android:strokeColor="#9E9585"
+        android:strokeLineCap="round" />
+</vector>

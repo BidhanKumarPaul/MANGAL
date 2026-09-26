@@ -12,7 +12,6 @@ import android.net.Uri
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.Settings
-import android.telephony.SmsManager
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.serialization.json.JsonObject
@@ -29,15 +28,15 @@ class AndroidToolExecutor @Inject constructor(
     private val toolRegistry: ToolRegistry
 ) {
     /**
-     * Executes a validated tool call against Android system APIs without root.
-     * Verifies runtime permissions first and returns a graceful fallback when denied.
+     * Executes a validated tool call against Android system APIs without root and
+     * without triggering Google Play Protect restricted-permission heuristics.
      */
     fun execute(toolName: String, arguments: JsonObject): ToolExecutionResult {
         return try {
             when (toolName) {
                 "set_alarm_or_timer" -> executeAlarmOrTimer(arguments)
                 "create_calendar_event" -> executeCalendarEvent(arguments)
-                "send_sms_or_place_call" -> executeSmsOrCall(arguments)
+                "send_sms_or_place_call" -> executeSmsOrCallPlayProtectSafe(arguments)
                 "open_installed_app" -> executeOpenApp(arguments)
                 "adjust_device_setting" -> executeDeviceSetting(arguments)
                 "offline_app_or_web_search" -> executeSearchIntent(arguments)
@@ -129,54 +128,36 @@ class AndroidToolExecutor @Inject constructor(
         )
     }
 
-    private fun executeSmsOrCall(args: JsonObject): ToolExecutionResult {
+    /**
+     * Play Protect Safe Execution:
+     * Uses verified Android system intents (ACTION_SENDTO smsto: and ACTION_DIAL tel:)
+     * so Google Play Protect never flags the APK for background SMS/Call toll-fraud heuristics.
+     */
+    private fun executeSmsOrCallPlayProtectSafe(args: JsonObject): ToolExecutionResult {
         val action = args["action"]?.jsonPrimitive?.content ?: "sms"
         val recipient = args["recipient"]?.jsonPrimitive?.content ?: ""
         val body = args["body"]?.jsonPrimitive?.content ?: ""
 
         return if (action == "call") {
-            val hasCallPerm = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.CALL_PHONE
-            ) == PackageManager.PERMISSION_GRANTED
-
-            if (!hasCallPerm) {
-                return ToolExecutionResult(
-                    toolName = "send_sms_or_place_call",
-                    success = false,
-                    humanReadableSummary = "I can't place a direct call to $recipient without CALL_PHONE permission.",
-                    requiresPermissionPrompt = Manifest.permission.CALL_PHONE
-                )
-            }
-            val callIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$recipient")).apply {
+            val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(recipient)}")).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            context.startActivity(callIntent)
+            context.startActivity(dialIntent)
             ToolExecutionResult(
                 toolName = "send_sms_or_place_call",
                 success = true,
-                humanReadableSummary = "Calling $recipient now."
+                humanReadableSummary = "Opened system dialer for $recipient (Play-Protect-safe ACTION_DIAL)."
             )
         } else {
-            val hasSmsPerm = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.SEND_SMS
-            ) == PackageManager.PERMISSION_GRANTED
-
-            if (!hasSmsPerm) {
-                return ToolExecutionResult(
-                    toolName = "send_sms_or_place_call",
-                    success = false,
-                    humanReadableSummary = "I can't send an SMS to $recipient without SEND_SMS permission.",
-                    requiresPermissionPrompt = Manifest.permission.SEND_SMS
-                )
+            val smsIntent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${Uri.encode(recipient)}")).apply {
+                putExtra("sms_body", body)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            val smsManager = context.getSystemService(SmsManager::class.java)
-            smsManager.sendTextMessage(recipient, null, body, null, null)
+            context.startActivity(smsIntent)
             ToolExecutionResult(
                 toolName = "send_sms_or_place_call",
                 success = true,
-                humanReadableSummary = "Sent SMS to $recipient: \"$body\"."
+                humanReadableSummary = "Prepared SMS to $recipient (\"$body\") via Play-Protect-safe ACTION_SENDTO."
             )
         }
     }
@@ -263,7 +244,7 @@ class AndroidToolExecutor @Inject constructor(
                 ToolExecutionResult(
                     "adjust_device_setting",
                     true,
-                    "Opened Android Wi-Fi Quick Settings Panel (direct toggle restricted on Android 10+)."
+                    "Opened Android Wi-Fi Quick Settings Panel."
                 )
             }
             "bluetooth" -> {
@@ -301,7 +282,7 @@ class AndroidToolExecutor @Inject constructor(
         return ToolExecutionResult(
             toolName = "offline_app_or_web_search",
             success = true,
-            humanReadableSummary = "Launched external search intent for '$query' (note: MANGAL itself remains 100% offline)."
+            humanReadableSummary = "Launched external search intent for '$query' (MANGAL remains 100% offline)."
         )
     }
 }

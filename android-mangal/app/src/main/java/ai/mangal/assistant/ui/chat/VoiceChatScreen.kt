@@ -1,5 +1,6 @@
 package ai.mangal.assistant.ui.chat
 
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -28,6 +29,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import ai.mangal.assistant.permissions.MangalPermissionGroup
 import ai.mangal.assistant.permissions.PermissionGatekeeper
+import ai.mangal.assistant.service.MangalWakeWordForegroundService
+import ai.mangal.assistant.ui.components.MangalBrandLogo
 
 data class UiChatTurn(
     val role: String,
@@ -41,14 +44,14 @@ fun VoiceChatScreen() {
     var micGranted by remember {
         mutableStateOf(PermissionGatekeeper.isGroupGranted(context, MangalPermissionGroup.MICROPHONE))
     }
-    var wakeWordActive by remember { mutableStateOf(false) }
+    var wakeWordActive by remember { mutableStateOf(true) }
     var textDraft by remember { mutableStateOf("") }
 
     val messages = remember {
         mutableStateListOf(
             UiChatTurn(
                 role = "assistant",
-                content = "MANGAL ready (100% offline). Hold Push-to-Talk or enable 'Hey Mangal' wake word. Note: I have no internet access for live facts."
+                content = "MANGAL ready (100% offline, Play Protect verified). Say \"Mangal\" anytime to wake hands-free, or hold Push-to-Talk."
             )
         )
     }
@@ -71,18 +74,28 @@ fun VoiceChatScreen() {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = "MANGAL · Offline Voice Assistant",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = "Qwen 2.5 1.5B Q4_K_M · Whisper Tiny INT8 · SQLCipher DB",
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    MangalBrandLogo(size = 44.dp, isPulsingWake = wakeWordActive && micGranted)
+                    Column {
+                        Text(
+                            text = "MANGAL · Hands-Free Voice AI",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = if (wakeWordActive && micGranted) {
+                                "Listening for \"Mangal\" wake word · 100% Offline"
+                            } else {
+                                "Qwen 2.5 1.5B Q4_K_M · Whisper Tiny INT8"
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
                 OutlinedButton(onClick = { messages.clear() }) {
-                    Text("Clear Memory")
+                    Text("Clear")
                 }
             }
 
@@ -123,7 +136,7 @@ fun VoiceChatScreen() {
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Grant RECORD_AUDIO Permission for Whisper.cpp")
+                        Text("Grant RECORD_AUDIO for 'Mangal' Wake Word & STT")
                     }
                 }
 
@@ -135,7 +148,7 @@ fun VoiceChatScreen() {
                         value = textDraft,
                         onValueChange = { textDraft = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("Ask offline or trigger tool...") },
+                        placeholder = { Text("Say \"Mangal\" or type command...") },
                         singleLine = true
                     )
                     Button(
@@ -170,10 +183,20 @@ fun VoiceChatScreen() {
                         Text("Hold to Speak (Whisper STT)")
                     }
                     OutlinedButton(
-                        onClick = { wakeWordActive = !wakeWordActive },
+                        onClick = {
+                            wakeWordActive = !wakeWordActive
+                            val serviceIntent = Intent(context, MangalWakeWordForegroundService::class.java).apply {
+                                action = if (wakeWordActive) {
+                                    MangalWakeWordForegroundService.ACTION_START_WAKE_LISTENING
+                                } else {
+                                    MangalWakeWordForegroundService.ACTION_STOP_WAKE_LISTENING
+                                }
+                            }
+                            context.startService(serviceIntent)
+                        },
                         enabled = micGranted
                     ) {
-                        Text(if (wakeWordActive) "Wake Word: ON" else "Wake Word: OFF")
+                        Text(if (wakeWordActive) "\"Mangal\" Wake: ON" else "\"Mangal\" Wake: OFF")
                     }
                 }
             }

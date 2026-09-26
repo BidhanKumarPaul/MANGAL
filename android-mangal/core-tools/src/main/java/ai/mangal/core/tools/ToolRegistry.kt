@@ -54,8 +54,8 @@ class ToolRegistry @Inject constructor() {
         ),
         ToolDefinition(
             name = "send_sms_or_place_call",
-            description = "Sends an SMS or initiates a phone call after runtime permission check.",
-            requiredPermissions = listOf("android.permission.SEND_SMS", "android.permission.CALL_PHONE", "android.permission.READ_CONTACTS"),
+            description = "Prepares an SMS or phone call via Play-Protect-safe system intents (ACTION_SENDTO smsto: / ACTION_DIAL tel:).",
+            requiredPermissions = listOf("android.permission.READ_CONTACTS"),
             parametersSchemaJson = """{"type":"object","properties":{"action":{"type":"string","enum":["sms","call"]},"recipient":{"type":"string"},"body":{"type":"string"}},"required":["action","recipient"]}"""
         ),
         ToolDefinition(
