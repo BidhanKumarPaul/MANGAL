@@ -1,0 +1,6 @@
+{
+  "name": "MANGAL — Offline Android Voice Assistant",
+  "description": "Production-ready multi-module Android Kotlin project scaffold, architecture inspector, and interactive Phase 1 device simulator for MANGAL offline voice assistant.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
