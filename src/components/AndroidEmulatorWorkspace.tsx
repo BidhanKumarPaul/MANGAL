@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Mic,
-  MicOff,
   Volume2,
   VolumeX,
   Wifi,
@@ -16,20 +15,20 @@ import {
   Power,
   Send,
   Trash2,
-  ChevronDown,
   ChevronUp,
-  Bell,
   Clock,
   Calendar,
   MessageSquare,
   Phone,
   CheckCircle2,
-  AlertTriangle,
   Radio,
-  Cpu,
   Play,
-  Sliders,
-  Download
+  Download,
+  Pause,
+  FolderOpen,
+  PlusCircle,
+  Link2,
+  Sparkles
 } from 'lucide-react';
 
 export interface LogcatEntry {
@@ -51,7 +50,25 @@ type EmulatorOsView =
   | 'SYSTEM_ALARM_INTENT'
   | 'SYSTEM_CALENDAR_INTENT';
 
-type MangalAppTab = 'voice_chat' | 'model_manager' | 'settings';
+type MangalAppTab = 'voice_chat' | 'model_manager' | 'custom_model' | 'settings';
+
+type SimDownloadStatus =
+  | 'IDLE'
+  | 'CONNECTING'
+  | 'DOWNLOADING'
+  | 'VERIFYING_CHECKSUM'
+  | 'COMPLETED'
+  | 'PAUSED'
+  | 'FAILED';
+
+interface SimDownloadProgress {
+  modelId: string;
+  bytesDownloadedMb: number;
+  totalMb: number;
+  speedMbPerSec: number;
+  status: SimDownloadStatus;
+  errorMessage?: string;
+}
 
 interface SimulatedModel {
   modelId: string;
@@ -64,6 +81,7 @@ interface SimulatedModel {
   sha256: string;
   downloaded: boolean;
   isActive: boolean;
+  isCustom?: boolean;
 }
 
 interface ChatTurn {
@@ -197,12 +215,24 @@ const INITIAL_MODELS: SimulatedModel[] = [
     displayName: 'Qwen 2.5 1.5B Instruct (Q4_K_M)',
     category: 'LLM_GGUF',
     quantization: 'Q4_K_M',
-    sizeMb: 1120,
-    requiredRamMb: 3072,
+    sizeMb: 1117,
+    requiredRamMb: 2560,
     license: 'Apache-2.0',
     sha256: '6b7e92e40a99',
     downloaded: true,
     isActive: true
+  },
+  {
+    modelId: 'qwen2.5-0.5b-instruct-q4_k_m',
+    displayName: 'Qwen 2.5 0.5B Fast Instruct (Q4_K_M · Ultra-Light)',
+    category: 'LLM_GGUF',
+    quantization: 'Q4_K_M',
+    sizeMb: 398,
+    requiredRamMb: 1200,
+    license: 'Apache-2.0',
+    sha256: '4a9c81e2b310',
+    downloaded: false,
+    isActive: false
   },
   {
     modelId: 'qwen2.5-3b-instruct-q4_k_m',
@@ -210,7 +240,7 @@ const INITIAL_MODELS: SimulatedModel[] = [
     category: 'LLM_GGUF',
     quantization: 'Q4_K_M',
     sizeMb: 2105,
-    requiredRamMb: 5632,
+    requiredRamMb: 5120,
     license: 'Apache-2.0',
     sha256: '9f1a48b2d307',
     downloaded: false,
@@ -234,23 +264,23 @@ const INITIAL_MODELS: SimulatedModel[] = [
     category: 'STT_WHISPER',
     quantization: 'Q8_0',
     sizeMb: 42,
-    requiredRamMb: 1024,
+    requiredRamMb: 768,
     license: 'MIT',
     sha256: 'c4e8a912b7d0',
     downloaded: true,
     isActive: true
   },
   {
-    modelId: 'openwakeword-hey-mangal-v1',
-    displayName: 'openWakeWord "Mangal" Detector (ONNX)',
-    category: 'WAKE_WORD',
-    quantization: 'INT8',
-    sizeMb: 2.4,
-    requiredRamMb: 512,
-    license: 'Apache-2.0',
-    sha256: 'f0e1d2c3b4a5',
-    downloaded: true,
-    isActive: true
+    modelId: 'whisper-base-en-q8_0',
+    displayName: 'Whisper Base.en (INT8 / Q8_0)',
+    category: 'STT_WHISPER',
+    quantization: 'Q8_0',
+    sizeMb: 78,
+    requiredRamMb: 1280,
+    license: 'MIT',
+    sha256: 'e19b47f0a21c',
+    downloaded: false,
+    isActive: false
   }
 ];
 
@@ -268,24 +298,38 @@ export default function AndroidEmulatorWorkspace({
   // Hardware & System Toggles inside Emulator
   const [torchOn, setTorchOn] = useState<boolean>(false);
   const [mediaVolume, setMediaVolume] = useState<number>(80);
-  const [wifiEnabled, setWifiEnabled] = useState<boolean>(false); // 100% offline by default!
-  const [deviceRamMb, setDeviceRamMb] = useState<number>(8192);
-  const [thermalStatus, setThermalStatus] = useState<'NOMINAL' | 'MODERATE'>('NOMINAL');
+  const [wifiEnabled, setWifiEnabled] = useState<boolean>(true);
+  const [wifiOnlyGuard, setWifiOnlyGuard] = useState<boolean>(false);
+  const [deviceRamMb] = useState<number>(8192);
+  const [thermalStatus] = useState<'NOMINAL' | 'MODERATE'>('NOMINAL');
 
   // Hands-Free "Mangal" Wake Word & Real Browser Mic State
   const [wakeServiceRunning, setWakeServiceRunning] = useState<boolean>(true);
   const [continuousRealMicActive, setContinuousRealMicActive] = useState<boolean>(false);
   const [wakeTriggeredListening, setWakeTriggeredListening] = useState<boolean>(false);
+  const [awaitingFollowUpAfterMangal, setAwaitingFollowUpAfterMangal] = useState<boolean>(false);
   const [liveHeardTranscript, setLiveHeardTranscript] = useState<string>('');
-  const [rmsEnergy, setRmsEnergy] = useState<number>(0.04);
+  const [rmsEnergy, setRmsEnergy] = useState<number>(0.08);
 
   // Native TTS & Model State
   const [speechRate, setSpeechRate] = useState<number>(1.05);
   const [speechPitch, setSpeechPitch] = useState<number>(1.0);
   const [ttsMuted, setTtsMuted] = useState<boolean>(false);
   const [models, setModels] = useState<SimulatedModel[]>(INITIAL_MODELS);
-  const [modelErrorBanner, setModelErrorBanner] = useState<string | null>(null);
+  const [downloadProgressMap, setDownloadProgressMap] = useState<
+    Record<string, SimDownloadProgress>
+  >({});
+  const [modelStatusBanner, setModelStatusBanner] = useState<string | null>(
+    'HTTP Range Resume & SHA-256 Verifier Ready. Tap Download on any model to watch the live progress bar.'
+  );
   const [inputDraft, setInputDraft] = useState<string>('');
+
+  // Custom Model Tab State
+  const [customModelName, setCustomModelName] = useState<string>('');
+  const [customModelUrl, setCustomModelUrl] = useState<string>('');
+  const [customCategory, setCustomCategory] = useState<'LLM_GGUF' | 'STT_WHISPER'>('LLM_GGUF');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const downloadTimersRef = useRef<Record<string, number>>({});
 
   // Intent Sheet State (for SMS, Dialer, Alarm, Calendar)
   const [lastIntentPayload, setLastIntentPayload] = useState<{
@@ -318,19 +362,19 @@ export default function AndroidEmulatorWorkspace({
       id: 'log-2',
       timestamp: '09:41:00.218',
       pid: '4812-4849',
-      tag: 'LlamaJniBridge',
+      tag: 'MangalSpeechListener',
       level: 'I',
       message:
-        'Loaded qwen2.5-1.5b-instruct-q4_k_m.gguf (mmap=true, n_ctx=4096, threads=4, 16KB ELF aligned).'
+        'SpeechRecognizer active in STANDBY_LISTENING_FOR_MANGAL — Say "Mangal" or tap Mic anytime.'
     },
     {
       id: 'log-3',
       timestamp: '09:41:00.340',
       pid: '4812-4862',
-      tag: 'MangalWakeWordSvc',
+      tag: 'ResumableDownloader',
       level: 'I',
       message:
-        'startForeground(1001, FOREGROUND_SERVICE_TYPE_MICROPHONE) — Listening for wake phrase "Mangal".'
+        'Catalog seeded (6 models + Custom GGUF SAF/URL importer ready). Progress StateFlow connected.'
     },
     {
       id: 'log-4',
@@ -347,17 +391,21 @@ export default function AndroidEmulatorWorkspace({
     {
       id: 'welcome-1',
       role: 'assistant',
-      text: 'MANGAL v1.1 running inside Android 15 (API 35) Emulator. Hands-free wake word is active: say "Mangal" (like "Hey Google") or tap any voice command to watch the live native pipeline and Logcat.',
+      text: 'MANGAL v1.2 is actively listening for "Mangal". Say "Mangal, turn on the flashlight", tap any quick chip above, check live download progress bars in Models, or import your own .gguf in Custom GGUF.',
       timestamp: '09:41:00'
     }
   ]);
+
+  const activeLlmModel =
+    models.find((m) => m.category === 'LLM_GGUF' && m.isActive)?.displayName ||
+    'Built-In Offline Action Engine';
 
   const appendLog = useCallback(
     (tag: string, level: LogcatEntry['level'], message: string) => {
       const now = new Date();
       const ts = `${now.toTimeString().slice(0, 8)}.${String(now.getMilliseconds()).padStart(3, '0')}`;
       setLogcat((prev) => [
-        ...prev.slice(-35),
+        ...prev.slice(-38),
         {
           id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           timestamp: ts,
@@ -371,7 +419,7 @@ export default function AndroidEmulatorWorkspace({
     []
   );
 
-  // Acoustic wake earcon (matches ToneGenerator.TONE_PROP_BEEP in MangalWakeWordForegroundService.kt)
+  // Acoustic wake earcon
   const playWakeEarcon = useCallback(() => {
     try {
       const AudioCtx =
@@ -418,19 +466,17 @@ export default function AndroidEmulatorWorkspace({
     [ttsMuted, mediaVolume, speechRate, speechPitch, appendLog]
   );
 
-  // Execute a full offline voice turn through OpenWakeWordDetector -> WhisperJniBridge -> LlamaJniBridge -> AndroidToolExecutor
+  // Execute a full offline voice turn through MangalSpeechListener -> OpenWakeWordDetector -> LlamaCppEngineImpl -> AndroidToolExecutor
   const executeFullVoiceLoop = useCallback(
     (rawUtterance: string, isWakeTriggered = false) => {
       const trimmed = rawUtterance.trim();
       if (!trimmed) return;
 
-      // Check wake word prefix ("Mangal" / "Hey Mangal")
-      const wakeRegex = /^(?:hey\s+)?mangal\b[\s,.:;-]*(.*)$/i;
+      const wakeRegex = /^(?:hey\s+|ok\s+|hello\s+)?(?:mangal|mongol|mangala|mangle)\b[\s,.:;-]*(.*)$/i;
       const match = trimmed.match(wakeRegex);
-      const wokeByPhrase = isWakeTriggered || Boolean(match);
+      const wokeByPhrase = isWakeTriggered || Boolean(match) || awaitingFollowUpAfterMangal;
       const commandBody = match && match[1].trim().length > 0 ? match[1].trim() : trimmed;
 
-      // Ensure MANGAL_APP is foregrounded if woken from Home Screen
       setOsView('MANGAL_APP');
       setMangalTab('voice_chat');
 
@@ -438,18 +484,11 @@ export default function AndroidEmulatorWorkspace({
         playWakeEarcon();
         setWakeTriggeredListening(true);
         appendLog(
-          'OpenWakeWordDetector',
+          'MangalSpeechListener',
           'I',
-          `Wake phrase "Mangal" detected (confidence=0.91 >= threshold=0.52). Transitioning to COMMAND_CAPTURE.`
+          `Wake phrase "Mangal" matched! Phase -> WAKE_TRIGGERED_AWAITING_COMMAND.`
         );
-        setTimeout(() => setWakeTriggeredListening(false), 1600);
       }
-
-      appendLog(
-        'WhisperJniBridge',
-        'D',
-        `transcribePcm(samples=24320, threads=4) -> "${trimmed}" (136ms)`
-      );
 
       const nowTime = new Date().toLocaleTimeString([], {
         hour: '2-digit',
@@ -462,13 +501,15 @@ export default function AndroidEmulatorWorkspace({
         role: 'user',
         text: trimmed,
         triggeredByWakeWord: wokeByPhrase,
-        sttLatencyMs: 136,
+        sttLatencyMs: 92,
         timestamp: nowTime
       };
 
-      // If user only said "Mangal" with no command yet
-      if (/^(?:hey\s+)?mangal$/i.test(trimmed)) {
-        const promptReply = "I'm listening. Go ahead with your command.";
+      // If user only said "Mangal" (like "Hey Google") without a trailing command yet:
+      if (/^(?:hey\s+|ok\s+)?(?:mangal|mongol|mangala)$/i.test(trimmed)) {
+        const promptReply = "Yes? I'm listening. Tell me what to do (e.g., 'turn on the flashlight' or 'set alarm for 6:30 AM').";
+        setAwaitingFollowUpAfterMangal(true);
+        setWakeTriggeredListening(true);
         setChatHistory((prev) => [
           ...prev,
           userTurn,
@@ -477,13 +518,21 @@ export default function AndroidEmulatorWorkspace({
             role: 'assistant',
             text: promptReply,
             triggeredByWakeWord: true,
-            llmTokensPerSec: 32.0,
+            llmTokensPerSec: 38.4,
             timestamp: nowTime
           }
         ]);
-        speakViaAndroidTts(promptReply);
+        appendLog(
+          'MangalSpeechListener',
+          'I',
+          'Wake word "Mangal" acknowledged! Microphone open in WAKE_TRIGGERED_AWAITING_COMMAND.'
+        );
+        speakViaAndroidTts("Yes? I'm listening. Tell me what to do.");
         return;
       }
+
+      setAwaitingFollowUpAfterMangal(false);
+      setTimeout(() => setWakeTriggeredListening(false), 1200);
 
       const lower = commandBody.toLowerCase();
       let toolCallJson: string | undefined;
@@ -492,30 +541,43 @@ export default function AndroidEmulatorWorkspace({
 
       // 1. Alarm or Timer
       if (lower.includes('alarm') || lower.includes('timer') || lower.includes('wake me')) {
-        const payload = {
-          type: 'tool_call',
-          toolName: 'set_alarm_or_timer',
-          arguments: { mode: 'alarm', hour: 6, minute: 30, message: 'Morning Workout' }
-        };
+        const isTimer = lower.includes('timer');
+        const payload = isTimer
+          ? {
+              type: 'tool_call',
+              toolName: 'set_alarm_or_timer',
+              arguments: { mode: 'timer', durationSeconds: 300, message: 'MANGAL Voice Timer' }
+            }
+          : {
+              type: 'tool_call',
+              toolName: 'set_alarm_or_timer',
+              arguments: { mode: 'alarm', hour: 6, minute: 30, message: 'Morning Workout' }
+            };
         toolCallJson = JSON.stringify(payload, null, 2);
         setLastIntentPayload((p) => ({
           ...p,
-          alarmTime: '06:30',
-          alarmLabel: 'Morning Workout'
+          alarmTime: isTimer ? '05:00 Timer' : '06:30',
+          alarmLabel: isTimer ? 'MANGAL Voice Timer' : 'Morning Workout'
         }));
         appendLog(
           'AndroidToolExecutor',
           'I',
-          'startActivity(Intent(AlarmClock.ACTION_SET_ALARM) { hour=6, min=30, skipUi=true })'
+          isTimer
+            ? 'startActivity(Intent(AlarmClock.ACTION_SET_TIMER) { length=300s, skipUi=true })'
+            : 'startActivity(Intent(AlarmClock.ACTION_SET_ALARM) { hour=6, min=30, skipUi=true })'
         );
         toolResult = {
           toolName: 'set_alarm_or_timer',
           success: true,
-          summary: 'Scheduled 06:30 alarm ("Morning Workout") via AlarmClock.ACTION_SET_ALARM.',
-          launchedIntentLabel: 'Open Clock Alarm View',
+          summary: isTimer
+            ? 'Started 5-minute countdown timer via AlarmClock.ACTION_SET_TIMER.'
+            : 'Scheduled 06:30 alarm ("Morning Workout") via AlarmClock.ACTION_SET_ALARM.',
+          launchedIntentLabel: 'Open Clock View',
           onOpenIntentSheet: () => setOsView('SYSTEM_ALARM_INTENT')
         };
-        replyText = "Done. I've set your alarm for 6:30 AM labeled Morning Workout.";
+        replyText = isTimer
+          ? "Done. I've started a 5-minute timer."
+          : "Done. I've set your alarm for 6:30 AM labeled Morning Workout.";
       }
       // 2. Flashlight / Torch
       else if (lower.includes('flashlight') || lower.includes('torch')) {
@@ -649,7 +711,7 @@ export default function AndroidEmulatorWorkspace({
           commandBody
             .replace(/^(open|launch)\s+/i, '')
             .replace(/on my phone/i, '')
-            .trim() || 'Spotify';
+            .trim() || 'YouTube';
         const payload = {
           type: 'tool_call',
           toolName: 'open_installed_app',
@@ -672,14 +734,13 @@ export default function AndroidEmulatorWorkspace({
       else {
         const payload = {
           type: 'reply',
-          replyText:
-            'Lithium-ion batteries store energy by moving lithium ions between a graphite anode and a metal-oxide cathode. Note: Because I run 100% offline on-device, I have no internet connection for live weather or breaking news.'
+          replyText: `Offline response via ${activeLlmModel}: I heard "${commandBody}". All 6 hardware tools (flashlight, alarm, timer, volume, open app, SMS/call) are active and 100% offline.`
         };
         toolCallJson = JSON.stringify(payload, null, 2);
         appendLog(
           'LlamaJniBridge',
           'I',
-          'completionWithGrammar() -> generated 44 tokens at 29.4 tok/s (offline).'
+          `completionWithGrammar(${activeLlmModel}) -> generated 38 tokens at 31.2 tok/s.`
         );
         replyText = payload.replyText;
       }
@@ -689,7 +750,7 @@ export default function AndroidEmulatorWorkspace({
         role: 'assistant',
         text: replyText,
         triggeredByWakeWord: wokeByPhrase,
-        llmTokensPerSec: thermalStatus === 'MODERATE' ? 14.8 : 29.4,
+        llmTokensPerSec: thermalStatus === 'MODERATE' ? 14.8 : 31.2,
         toolCallJson,
         toolExecutionResult: toolResult,
         timestamp: nowTime
@@ -698,7 +759,15 @@ export default function AndroidEmulatorWorkspace({
       setChatHistory((prev) => [...prev, userTurn, assistantTurn]);
       speakViaAndroidTts(replyText);
     },
-    [playWakeEarcon, appendLog, mediaVolume, thermalStatus, speakViaAndroidTts]
+    [
+      awaitingFollowUpAfterMangal,
+      playWakeEarcon,
+      appendLog,
+      mediaVolume,
+      thermalStatus,
+      activeLlmModel,
+      speakViaAndroidTts
+    ]
   );
 
   // Continuous Real Browser Microphone Wake-Word Listener ("Mangal")
@@ -716,10 +785,11 @@ export default function AndroidEmulatorWorkspace({
           // ignore
         }
       }
-      appendLog('AudioRecordPcmCapture', 'I', 'Stopped live browser microphone stream.');
+      appendLog('MangalSpeechListener', 'I', 'Stopped live microphone stream.');
       return;
     }
 
+    playWakeEarcon();
     const SpeechRec =
       (window as unknown as Record<string, unknown>).SpeechRecognition ||
       (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
@@ -739,11 +809,11 @@ export default function AndroidEmulatorWorkspace({
           const transcript = String(event.results[lastIdx][0].transcript || '').trim();
           const isFinal = Boolean(event.results[lastIdx].isFinal);
           setLiveHeardTranscript(transcript);
-          setRmsEnergy(0.28 + Math.random() * 0.45);
+          setRmsEnergy(0.32 + Math.random() * 0.55);
 
           if (isFinal && transcript.length > 0) {
             setLiveHeardTranscript('');
-            setRmsEnergy(0.04);
+            setRmsEnergy(0.08);
             executeFullVoiceLoop(transcript, true);
           }
         };
@@ -751,23 +821,29 @@ export default function AndroidEmulatorWorkspace({
         rec.onerror = () => {
           setContinuousRealMicActive(false);
           appendLog(
-            'AudioRecordPcmCapture',
+            'MangalSpeechListener',
             'W',
-            'Browser mic permission declined or unavailable in iframe; use instant voice buttons.'
+            'Browser iframe mic permission blocked; running simulated voice capture.'
           );
+          // Fallback simulated capture so clicking Tap Mic to Speak always responds!
+          setLiveHeardTranscript('Mangal, turn on the flashlight...');
+          setTimeout(() => {
+            setLiveHeardTranscript('');
+            executeFullVoiceLoop('Mangal, turn on the flashlight', true);
+          }, 900);
         };
 
         rec.onend = () => {
           setContinuousRealMicActive(false);
-          setRmsEnergy(0.04);
+          setRmsEnergy(0.08);
         };
 
         rec.start();
         setContinuousRealMicActive(true);
         appendLog(
-          'AudioRecordPcmCapture',
+          'MangalSpeechListener',
           'I',
-          'Live 16kHz microphone capture started — Say "Mangal, <your command>" out loud!'
+          'SpeechRecognizer started — Speak your command or say "Mangal" now!'
         );
         return;
       } catch {
@@ -775,17 +851,18 @@ export default function AndroidEmulatorWorkspace({
       }
     }
 
-    // Fallback simulated wake capture if browser SpeechRecognition is blocked
+    // Fallback simulated wake capture if browser SpeechRecognition is unavailable
     setContinuousRealMicActive(true);
     setLiveHeardTranscript('Mangal, turn on the flashlight...');
     setTimeout(() => {
       setContinuousRealMicActive(false);
       setLiveHeardTranscript('');
       executeFullVoiceLoop('Mangal, turn on the flashlight', true);
-    }, 1100);
+    }, 1000);
   };
 
   useEffect(() => {
+    const timers = downloadTimersRef.current;
     return () => {
       if (recognitionRef.current) {
         try {
@@ -795,30 +872,258 @@ export default function AndroidEmulatorWorkspace({
           // ignore
         }
       }
+      Object.values(timers).forEach((id) => window.clearInterval(id));
     };
   }, []);
 
-  const handleModelAction = (model: SimulatedModel) => {
-    setModelErrorBanner(null);
+  // REAL-TIME STREAMING MODEL DOWNLOADER WITH LIVE PROGRESS BAR, SPEED, PAUSE & RESUME
+  const startOrResumeModelDownload = (model: SimulatedModel) => {
+    if (wifiOnlyGuard && !wifiEnabled) {
+      const msg =
+        "Wi-Fi-Only Guard is ON while Wi-Fi is disconnected. Turn off 'Restrict to Wi-Fi Only' above or enable Wi-Fi to download.";
+      setModelStatusBanner(msg);
+      setDownloadProgressMap((prev) => ({
+        ...prev,
+        [model.modelId]: {
+          modelId: model.modelId,
+          bytesDownloadedMb: prev[model.modelId]?.bytesDownloadedMb || 0,
+          totalMb: model.sizeMb,
+          speedMbPerSec: 0,
+          status: 'FAILED',
+          errorMessage: msg
+        }
+      }));
+      appendLog('ResumableDownloader', 'E', msg);
+      return;
+    }
+
+    const existing = downloadProgressMap[model.modelId];
+    let currentMb = existing && existing.status === 'PAUSED' ? existing.bytesDownloadedMb : 0;
+    const totalMb = model.sizeMb;
+
+    setModelStatusBanner(`Downloading ${model.displayName} via HTTP Range stream...`);
+    appendLog(
+      'ResumableDownloader',
+      'I',
+      `GET ${model.modelId}.gguf (Range: bytes=${Math.floor(currentMb * 1048576)}-) -> HTTP 206 Partial Content`
+    );
+
+    setDownloadProgressMap((prev) => ({
+      ...prev,
+      [model.modelId]: {
+        modelId: model.modelId,
+        bytesDownloadedMb: currentMb,
+        totalMb,
+        speedMbPerSec: 42.5,
+        status: currentMb > 0 ? 'DOWNLOADING' : 'CONNECTING'
+      }
+    }));
+
+    if (downloadTimersRef.current[model.modelId]) {
+      window.clearInterval(downloadTimersRef.current[model.modelId]);
+    }
+
+    const stepMb = Math.max(12, Math.round(totalMb / 14));
+    const timerId = window.setInterval(() => {
+      currentMb = Math.min(totalMb, currentMb + stepMb);
+      const speed = +(38.4 + Math.random() * 19.2).toFixed(2);
+
+      if (currentMb < totalMb) {
+        setDownloadProgressMap((prev) => ({
+          ...prev,
+          [model.modelId]: {
+            modelId: model.modelId,
+            bytesDownloadedMb: currentMb,
+            totalMb,
+            speedMbPerSec: speed,
+            status: 'DOWNLOADING'
+          }
+        }));
+      } else {
+        window.clearInterval(timerId);
+        delete downloadTimersRef.current[model.modelId];
+
+        // Verifying SHA-256 stage
+        setDownloadProgressMap((prev) => ({
+          ...prev,
+          [model.modelId]: {
+            modelId: model.modelId,
+            bytesDownloadedMb: totalMb,
+            totalMb,
+            speedMbPerSec: 0,
+            status: 'VERIFYING_CHECKSUM'
+          }
+        }));
+        appendLog(
+          'ResumableDownloader',
+          'I',
+          `Download 100% (${totalMb} MB). Computing streaming SHA-256 digest...`
+        );
+
+        window.setTimeout(() => {
+          setDownloadProgressMap((prev) => ({
+            ...prev,
+            [model.modelId]: {
+              modelId: model.modelId,
+              bytesDownloadedMb: totalMb,
+              totalMb,
+              speedMbPerSec: 0,
+              status: 'COMPLETED'
+            }
+          }));
+          setModels((prev) =>
+            prev.map((m) =>
+              m.category === model.category
+                ? {
+                    ...m,
+                    downloaded: m.modelId === model.modelId ? true : m.downloaded,
+                    isActive: m.modelId === model.modelId
+                  }
+                : m
+            )
+          );
+          setModelStatusBanner(
+            `SHA-256 Verified & Activated: ${model.displayName} (setExecutable=false)`
+          );
+          appendLog(
+            'LlamaJniBridge',
+            'I',
+            `Verified SHA-256 (${model.sha256}) & activated ${model.displayName} in engine.`
+          );
+        }, 550);
+      }
+    }, 240);
+
+    downloadTimersRef.current[model.modelId] = timerId;
+  };
+
+  const pauseModelDownload = (modelId: string) => {
+    if (downloadTimersRef.current[modelId]) {
+      window.clearInterval(downloadTimersRef.current[modelId]);
+      delete downloadTimersRef.current[modelId];
+    }
+    setDownloadProgressMap((prev) => {
+      const cur = prev[modelId];
+      if (!cur) return prev;
+      return {
+        ...prev,
+        [modelId]: {
+          ...cur,
+          speedMbPerSec: 0,
+          status: 'PAUSED'
+        }
+      };
+    });
+    setModelStatusBanner(`Paused ${modelId}.part on disk. Tap Resume Download anytime.`);
+    appendLog('ResumableDownloader', 'W', `Paused ${modelId}.part — ready for HTTP Range resume.`);
+  };
+
+  const activateDownloadedModel = (model: SimulatedModel) => {
     const safeLimit = Math.floor(deviceRamMb * 0.78);
     if (model.requiredRamMb > safeLimit) {
-      const errMsg = `OOM Refusal: ${model.displayName} needs ${model.requiredRamMb} MB RAM (>78% of ${deviceRamMb} MB device).`;
-      setModelErrorBanner(errMsg);
+      const errMsg = `OOM Guard Refusal: ${model.displayName} needs ${model.requiredRamMb} MB RAM (>78% of ${deviceRamMb} MB).`;
+      setModelStatusBanner(errMsg);
       appendLog('DeviceHealthAndRamGuard', 'E', errMsg);
       return;
     }
     setModels((prev) =>
       prev.map((m) =>
-        m.category === model.category
-          ? { ...m, isActive: m.modelId === model.modelId, downloaded: m.modelId === model.modelId ? true : m.downloaded }
-          : m
+        m.category === model.category ? { ...m, isActive: m.modelId === model.modelId } : m
       )
     );
+    setModelStatusBanner(`Active Model Switched: ${model.displayName}`);
     appendLog(
       'LlamaJniBridge',
       'I',
-      `Switched active ${model.category} model -> ${model.modelId} (setExecutable=false, setWritable=false)`
+      `Loaded ${model.modelId} (mmap=true, setExecutable=false, Play Protect DCL Safe)`
     );
+  };
+
+  const deleteModelFromDisk = (model: SimulatedModel) => {
+    if (downloadTimersRef.current[model.modelId]) {
+      window.clearInterval(downloadTimersRef.current[model.modelId]);
+      delete downloadTimersRef.current[model.modelId];
+    }
+    setDownloadProgressMap((prev) => {
+      const next = { ...prev };
+      delete next[model.modelId];
+      return next;
+    });
+    if (model.isCustom) {
+      setModels((prev) => prev.filter((m) => m.modelId !== model.modelId));
+    } else {
+      setModels((prev) =>
+        prev.map((m) =>
+          m.modelId === model.modelId ? { ...m, downloaded: false, isActive: false } : m
+        )
+      );
+    }
+    setModelStatusBanner(`Deleted ${model.displayName} from Context.filesDir/models/.`);
+    appendLog('ResumableDownloader', 'I', `Deleted ${model.modelId} from app-private storage.`);
+  };
+
+  // Import a user-selected custom .gguf / .bin file from device picker or preset
+  const handleImportCustomModelFile = (fileName: string, fileSizeMb: number) => {
+    const cleanId = `custom_${fileName
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]/g, '_')
+      .replace(/\.(gguf|bin)$/, '')}`;
+    const displayTitle = customModelName.trim() || fileName;
+    const newCustomModel: SimulatedModel = {
+      modelId: cleanId,
+      displayName: displayTitle,
+      category: customCategory,
+      quantization: 'CUSTOM',
+      sizeMb: fileSizeMb,
+      requiredRamMb: Math.max(1024, Math.round(fileSizeMb * 1.4)),
+      license: 'User Custom Model',
+      sha256: '8f4e2a91c0d7',
+      downloaded: true,
+      isActive: true,
+      isCustom: true
+    };
+
+    setModels((prev) => [
+      newCustomModel,
+      ...prev.map((m) => (m.category === customCategory ? { ...m, isActive: false } : m))
+    ]);
+    setCustomModelName('');
+    setModelStatusBanner(
+      `Imported & Activated Custom Model: ${displayTitle} (${fileSizeMb} MB · SHA-256 verified)`
+    );
+    appendLog(
+      'CustomModelScreen',
+      'I',
+      `SAF OpenDocument imported "${fileName}" (${fileSizeMb} MB) -> Context.filesDir/models/${cleanId}.gguf [ACTIVE]`
+    );
+  };
+
+  // Download a custom model from a direct HTTPS URL with live progress bar
+  const handleDownloadCustomUrlModel = (urlToUse?: string, nameToUse?: string) => {
+    const targetUrl = (urlToUse ?? customModelUrl).trim();
+    if (!targetUrl) return;
+    const rawFile = targetUrl.split('/').pop()?.split('?')[0] || 'custom_model.gguf';
+    const title = (nameToUse ?? customModelName).trim() || rawFile;
+    const slug = `custom_url_${title.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`;
+
+    const customUrlEntity: SimulatedModel = {
+      modelId: slug,
+      displayName: `${title} (Custom URL)`,
+      category: customCategory,
+      quantization: 'CUSTOM',
+      sizeMb: 940,
+      requiredRamMb: 2048,
+      license: 'Custom URL',
+      sha256: '7d3b91a0e4f2',
+      downloaded: false,
+      isActive: false,
+      isCustom: true
+    };
+
+    setModels((prev) => [customUrlEntity, ...prev.filter((m) => m.modelId !== slug)]);
+    setCustomModelUrl('');
+    setCustomModelName('');
+    startOrResumeModelDownload(customUrlEntity);
   };
 
   return (
@@ -854,8 +1159,8 @@ export default function AndroidEmulatorWorkspace({
             )}
 
             {/* INNER AMOLED VIEWPORT (1080x2424 Aspect Ratio) */}
-            <div className="relative h-[700px] w-full bg-[#0D1118] rounded-[30px] overflow-hidden flex flex-col justify-between border border-slate-800/80 select-none">
-              {/* ANDROID 15 STATUS BAR (Clickable to toggle Notification Shade) */}
+            <div className="relative h-[720px] w-full bg-[#090D14] rounded-[30px] overflow-hidden flex flex-col justify-between border border-slate-800/80 select-none">
+              {/* ANDROID 15 STATUS BAR */}
               <div
                 onClick={() => setShadeOpen((v) => !v)}
                 className="px-5 pt-2.5 pb-2 flex items-center justify-between text-[11px] font-mono text-slate-200 bg-black/40 backdrop-blur-xs z-30 cursor-pointer hover:bg-black/60 transition-colors"
@@ -886,7 +1191,9 @@ export default function AndroidEmulatorWorkspace({
                   {wakeServiceRunning && (
                     <span
                       className={`px-1.5 py-0.5 rounded-full text-[9px] font-sans font-bold flex items-center gap-1 ${
-                        wakeTriggeredListening || continuousRealMicActive
+                        wakeTriggeredListening ||
+                        continuousRealMicActive ||
+                        awaitingFollowUpAfterMangal
                           ? 'bg-amber-400 text-slate-950 animate-pulse'
                           : 'bg-emerald-500 text-slate-950'
                       }`}
@@ -931,7 +1238,7 @@ export default function AndroidEmulatorWorkspace({
                         <div>
                           <div className="text-[11px] leading-tight">Internet / Wi-Fi</div>
                           <div className="text-[10px] opacity-75">
-                            {wifiEnabled ? 'Connected' : '100% Offline'}
+                            {wifiEnabled ? 'Connected (For GGUF DL)' : '100% Offline'}
                           </div>
                         </div>
                       </button>
@@ -952,7 +1259,7 @@ export default function AndroidEmulatorWorkspace({
                       </button>
                     </div>
 
-                    {/* Persistent ForegroundService Notification (MangalWakeWordForegroundService) */}
+                    {/* Persistent ForegroundService Notification */}
                     <div className="space-y-2">
                       <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
                         Active Foreground Service (FOREGROUND_SERVICE_TYPE_MICROPHONE)
@@ -969,236 +1276,186 @@ export default function AndroidEmulatorWorkspace({
                         </div>
                         <p className="text-[11px] text-slate-300 leading-relaxed">
                           {wakeServiceRunning
-                            ? 'Hands-free active — Say "Mangal" to start speaking (0 bytes network traffic).'
+                            ? 'Hands-free active — Say "Mangal" to start speaking (0 bytes cloud telemetry).'
                             : 'Hands-free wake word paused.'}
                         </p>
-                        <div className="flex items-center gap-2 pt-1">
-                          <button
-                            onClick={() => {
-                              setWakeServiceRunning((v) => !v);
-                              appendLog(
-                                'MangalWakeWordSvc',
-                                'I',
-                                !wakeServiceRunning
-                                  ? 'Resumed FOREGROUND_SERVICE_TYPE_MICROPHONE wake listener.'
-                                  : 'Stopped foreground wake listener.'
-                              );
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] text-amber-300 cursor-pointer"
-                          >
-                            {wakeServiceRunning ? 'Pause Wake Word' : 'Resume Wake Word'}
-                          </button>
-                          <button
-                            onClick={() => {
-                              setShadeOpen(false);
-                              setOsView('PLAY_PROTECT_SCANNER');
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 text-[11px] cursor-pointer"
-                          >
-                            Play Protect Status
-                          </button>
-                        </div>
                       </div>
                     </div>
                   </div>
 
                   <button
                     onClick={() => setShadeOpen(false)}
-                    className="w-12 h-1 rounded-full bg-slate-700 mx-auto cursor-pointer"
-                  />
+                    className="w-full py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300 cursor-pointer"
+                  >
+                    Swipe Up to Dismiss Shade
+                  </button>
                 </div>
               )}
 
               {/* ==================== OS VIEW 1: PIXEL LAUNCHER HOME SCREEN ==================== */}
               {osView === 'PIXEL_LAUNCHER' && (
-                <div className="flex-1 p-6 flex flex-col justify-between bg-gradient-to-b from-[#15110E] via-[#0F131C] to-[#0A0D14]">
-                  {/* Pixel At-a-Glance Widget */}
-                  <div className="pt-4 space-y-1">
-                    <div className="text-xl font-semibold text-white font-display">
-                      Saturday, Sep 26
+                <div className="flex-1 p-5 flex flex-col justify-between bg-gradient-to-b from-[#131926] via-[#0E131D] to-[#090C12]">
+                  <div className="space-y-1 pt-2">
+                    <div className="text-2xl font-light text-white tracking-tight">
+                      Sat, Sep 26
                     </div>
-                    <div className="text-xs text-slate-400 flex items-center gap-1.5">
+                    <div className="text-xs text-slate-300 flex items-center gap-1.5">
                       <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
                       <span>Play Protect Verified · Offline AI Ready</span>
                     </div>
                   </div>
 
-                  {/* Center App Grid featuring the Custom MANGAL Adaptive Icon */}
-                  <div className="my-auto flex flex-col items-center gap-4">
-                    <div className="relative flex flex-col items-center">
-                      {showIconShortcuts && (
-                        <div className="mb-3 w-56 bg-slate-900/95 border border-slate-700 rounded-2xl p-2 shadow-2xl space-y-1 z-20">
-                          <div className="px-2.5 py-1 text-[10px] font-mono text-slate-400 border-b border-slate-800">
-                            MANGAL App Shortcuts
-                          </div>
-                          <button
-                            onClick={() => {
-                              setShowIconShortcuts(false);
-                              setOsView('MANGAL_APP');
-                              executeFullVoiceLoop('Mangal', true);
-                            }}
-                            className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-800 text-xs text-amber-300 flex items-center gap-2 cursor-pointer"
-                          >
-                            <Mic className="w-3.5 h-3.5" />
-                            <span>Say &ldquo;Mangal&rdquo; Now</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              setShowIconShortcuts(false);
-                              setOsView('MANGAL_APP');
-                              setMangalTab('model_manager');
-                            }}
-                            className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-800 text-xs text-slate-200 flex items-center gap-2 cursor-pointer"
-                          >
-                            <Cpu className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>Offline Model Manager</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              setShowIconShortcuts(false);
-                              setOsView('PLAY_PROTECT_SCANNER');
-                            }}
-                            className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-800 text-xs text-emerald-300 flex items-center gap-2 cursor-pointer"
-                          >
-                            <ShieldCheck className="w-3.5 h-3.5" />
-                            <span>Verify Play Protect Scan</span>
-                          </button>
-                        </div>
-                      )}
+                  {/* Center Showcase of the Custom MANGAL Adaptive App Icon */}
+                  <div className="my-auto flex flex-col items-center text-center space-y-3 p-4 rounded-3xl bg-black/35 border border-slate-800/80 backdrop-blur-xs">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-amber-300">
+                      Android 15 Adaptive Icon Preview
+                    </div>
+                    <div
+                      onClick={() => setOsView('MANGAL_APP')}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setShowIconShortcuts((v) => !v);
+                      }}
+                      className="cursor-pointer group flex flex-col items-center gap-2"
+                    >
+                      <MangalAppIconSvg size={96} pulsing={wakeServiceRunning} showWordmark />
+                      <span className="text-xs font-medium text-white group-hover:text-amber-300 transition-colors">
+                        MANGAL
+                      </span>
+                    </div>
 
+                    {showIconShortcuts && (
+                      <div className="w-full p-2.5 rounded-2xl bg-slate-900/95 border border-slate-700 text-left space-y-1.5 text-xs">
+                        <button
+                          onClick={() => {
+                            setShowIconShortcuts(false);
+                            setOsView('MANGAL_APP');
+                            executeFullVoiceLoop('Mangal', true);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 flex items-center gap-2 cursor-pointer"
+                        >
+                          <Mic className="w-3.5 h-3.5" />
+                          <span>Say &ldquo;Mangal&rdquo; Now</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShowIconShortcuts(false);
+                            setOsView('MANGAL_APP');
+                            setMangalTab('custom_model');
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-2 cursor-pointer"
+                        >
+                          <PlusCircle className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Import Custom .GGUF Model</span>
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-2 pt-1">
                       <button
                         onClick={() => setOsView('MANGAL_APP')}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setShowIconShortcuts((v) => !v);
-                        }}
-                        className="group flex flex-col items-center gap-2 cursor-pointer"
+                        className="px-3 py-1.5 rounded-xl bg-amber-400 text-slate-950 font-semibold text-xs hover:bg-amber-300 cursor-pointer"
                       >
-                        <MangalAppIconSvg size={84} pulsing={wakeServiceRunning} showWordmark />
-                        <span className="text-xs font-semibold text-white group-hover:text-amber-300">
-                          MANGAL
-                        </span>
+                        Tap Icon to Launch MANGAL
                       </button>
-
                       <button
                         onClick={() => setShowIconShortcuts((v) => !v)}
-                        className="mt-2 text-[11px] font-mono text-slate-400 hover:text-amber-300 underline cursor-pointer"
+                        className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-200 text-xs hover:bg-slate-700 cursor-pointer"
                       >
-                        {showIconShortcuts ? 'Hide App Shortcuts' : 'Inspect Adaptive Icon / Shortcuts'}
+                        {showIconShortcuts ? 'Hide Shortcuts' : 'Long-Press Menu'}
                       </button>
                     </div>
                   </div>
 
-                  {/* Pixel Dock */}
-                  <div className="p-3 rounded-3xl bg-slate-900/70 border border-slate-800/80 flex items-center justify-around">
-                    <button
-                      onClick={() => setOsView('SYSTEM_DIALER_INTENT')}
-                      className="p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-emerald-400 cursor-pointer"
-                      title="System Phone Dialer"
-                    >
-                      <Phone className="w-5 h-5" />
-                    </button>
-                    <button
-                      onClick={() => setOsView('SYSTEM_SMS_INTENT')}
-                      className="p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-sky-400 cursor-pointer"
-                      title="System Messages"
-                    >
-                      <MessageSquare className="w-5 h-5" />
-                    </button>
+                  {/* Pixel Home Screen Dock */}
+                  <div className="grid grid-cols-4 gap-3 pt-3 border-t border-slate-800/60 justify-items-center">
                     <button
                       onClick={() => setOsView('MANGAL_APP')}
-                      className="cursor-pointer"
-                      title="Launch MANGAL"
+                      className="flex flex-col items-center gap-1 cursor-pointer"
                     >
-                      <MangalAppIconSvg size={44} pulsing={wakeServiceRunning} />
-                    </button>
-                    <button
-                      onClick={() => setOsView('SYSTEM_ALARM_INTENT')}
-                      className="p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-amber-400 cursor-pointer"
-                      title="System Clock / Alarms"
-                    >
-                      <Clock className="w-5 h-5" />
+                      <MangalAppIconSvg size={48} pulsing={wakeServiceRunning} />
+                      <span className="text-[10px] text-slate-200">MANGAL</span>
                     </button>
                     <button
                       onClick={() => setOsView('PLAY_PROTECT_SCANNER')}
-                      className="p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-emerald-400 cursor-pointer"
-                      title="Google Play Protect"
+                      className="flex flex-col items-center gap-1 cursor-pointer"
                     >
-                      <ShieldCheck className="w-5 h-5" />
+                      <div className="w-12 h-12 rounded-[22%] bg-emerald-950/90 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                        <ShieldCheck className="w-6 h-6" />
+                      </div>
+                      <span className="text-[10px] text-slate-300">Play Protect</span>
+                    </button>
+                    <button
+                      onClick={() => setOsView('SYSTEM_ALARM_INTENT')}
+                      className="flex flex-col items-center gap-1 cursor-pointer"
+                    >
+                      <div className="w-12 h-12 rounded-[22%] bg-slate-900 border border-slate-700 flex items-center justify-center text-sky-400">
+                        <Clock className="w-6 h-6" />
+                      </div>
+                      <span className="text-[10px] text-slate-300">Clock</span>
+                    </button>
+                    <button
+                      onClick={() => setOsView('SYSTEM_SMS_INTENT')}
+                      className="flex flex-col items-center gap-1 cursor-pointer"
+                    >
+                      <div className="w-12 h-12 rounded-[22%] bg-slate-900 border border-slate-700 flex items-center justify-center text-amber-400">
+                        <MessageSquare className="w-6 h-6" />
+                      </div>
+                      <span className="text-[10px] text-slate-300">Messages</span>
                     </button>
                   </div>
                 </div>
               )}
 
-              {/* ==================== OS VIEW 2: GOOGLE PLAY PROTECT SCANNER SHEET ==================== */}
+              {/* ==================== OS VIEW 2: GOOGLE PLAY PROTECT SCANNER ==================== */}
               {osView === 'PLAY_PROTECT_SCANNER' && (
-                <div className="flex-1 p-5 flex flex-col justify-between bg-[#0F141D] overflow-y-auto">
-                  <div className="space-y-4">
+                <div className="flex-1 p-4 flex flex-col justify-between bg-[#0B1017] overflow-y-auto">
+                  <div className="space-y-3.5">
                     <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                       <div className="flex items-center gap-2.5">
-                        <ShieldCheck className="w-6 h-6 text-emerald-400" />
+                        <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                          <ShieldCheck className="w-5 h-5" />
+                        </div>
                         <div>
-                          <h2 className="text-sm font-semibold text-white">Google Play Protect</h2>
-                          <p className="text-[11px] text-slate-400">
-                            On-Device APK Verify Apps Scanner
-                          </p>
+                          <div className="text-xs font-bold text-white">Google Play Protect</div>
+                          <div className="text-[10px] text-emerald-400 font-mono">
+                            No harmful behavior found · Verified
+                          </div>
                         </div>
                       </div>
-                      <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-mono text-[10px]">
-                        VERIFIED SAFE
-                      </span>
+                      <MangalAppIconSvg size={38} />
                     </div>
 
-                    <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center gap-3.5">
-                      <MangalAppIconSvg size={52} showWordmark />
-                      <div>
-                        <div className="text-xs font-semibold text-white">
-                          MANGAL (ai.mangal.assistant)
-                        </div>
-                        <div className="text-[11px] font-mono text-emerald-400">
-                          No harmful behavior found · v1.1.0-playprotect-safe
-                        </div>
-                        <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                          APK Signature v1 + v2 + v3 + v4 Verified
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 text-xs">
-                      <div className="text-[11px] font-mono text-slate-400">
-                        Play Protect Heuristic Checks Passed:
-                      </div>
+                    <div className="space-y-2 text-[11px]">
                       {[
                         {
-                          title: 'Zero Restricted SMS / Call Fraud Permissions',
+                          title: 'Zero Restricted SMS / Call Log Permissions',
                           detail:
-                            'SEND_SMS and CALL_PHONE omitted from AndroidManifest.xml. Uses ACTION_SENDTO and ACTION_DIAL intents.'
+                            'Uses Intent.ACTION_SENDTO & ACTION_DIAL so Play Protect never flags sideloaded APK.'
                         },
                         {
-                          title: 'Dynamic Code Loading (DCL) Lock',
+                          title: 'APK Signature Scheme v1 + v2 + v3 + v4',
                           detail:
-                            'Model files in Context.filesDir/models/ enforced setExecutable(false) and setWritable(false).'
+                            '4096-bit RSA release keystore configured in app/build.gradle.kts.'
                         },
                         {
-                          title: '16 KB ELF Page Alignment & Uncompressed JNI',
+                          title: 'Non-Executable AI Model Storage (DCL Safe)',
                           detail:
-                            'libmangal_llama_jni.so & libmangal_whisper_jni.so linked with -Wl,-z,max-page-size=16384.'
+                            'Downloaded & custom .gguf files locked with setExecutable(false, false) and setWritable(false, false).'
                         },
                         {
-                          title: 'Transparent Microphone Foreground Service',
+                          title: 'Android 15 16 KB ELF Page Alignment',
                           detail:
-                            'MangalWakeWordForegroundService declares FOREGROUND_SERVICE_TYPE_MICROPHONE with user notification.'
+                            '-Wl,-z,max-page-size=16384 in CMakeLists.txt for libmangal_llama_jni.so & libmangal_whisper_jni.so.'
                         }
                       ].map((item) => (
                         <div
                           key={item.title}
-                          className="p-2.5 rounded-xl bg-slate-900/70 border border-slate-800/90 flex items-start gap-2.5"
+                          className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-start gap-2.5"
                         >
                           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                           <div>
-                            <div className="font-semibold text-slate-200 text-[11px]">
-                              {item.title}
-                            </div>
+                            <div className="font-semibold text-slate-100">{item.title}</div>
                             <div className="text-[10px] text-slate-400 leading-relaxed">
                               {item.detail}
                             </div>
@@ -1240,10 +1497,6 @@ export default function AndroidEmulatorWorkspace({
                         <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-100">
                           {lastIntentPayload.body}
                         </div>
-                        <p className="text-[11px] text-slate-400 leading-relaxed">
-                          Pre-filled by MANGAL without needing <code>SEND_SMS</code> permission, so
-                          Google Play Protect never interferes.
-                        </p>
                       </div>
                     )}
 
@@ -1256,9 +1509,6 @@ export default function AndroidEmulatorWorkspace({
                         <div className="text-lg font-mono text-white">
                           {lastIntentPayload.recipient}
                         </div>
-                        <p className="text-[11px] text-slate-400 leading-relaxed">
-                          Launched via Play-Protect-safe <code>ACTION_DIAL</code>.
-                        </p>
                       </div>
                     )}
 
@@ -1266,10 +1516,10 @@ export default function AndroidEmulatorWorkspace({
                       <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
                         <div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
                           <Clock className="w-4 h-4" />
-                          <span>Android Clock · AlarmClock.ACTION_SET_ALARM</span>
+                          <span>Android Clock · AlarmClock Intent</span>
                         </div>
                         <div className="text-2xl font-mono font-bold text-white">
-                          {lastIntentPayload.alarmTime} AM
+                          {lastIntentPayload.alarmTime}
                         </div>
                         <div className="text-xs text-slate-300">
                           Label: {lastIntentPayload.alarmLabel} (EXTRA_SKIP_UI = true)
@@ -1302,49 +1552,60 @@ export default function AndroidEmulatorWorkspace({
                 </div>
               )}
 
-              {/* ==================== OS VIEW 4: MANGAL MAINACTIVITY (COMPOSE UI) ==================== */}
+              {/* ==================== OS VIEW 4: MANGAL MAINACTIVITY (10/10 COMPOSE UI) ==================== */}
               {osView === 'MANGAL_APP' && (
-                <div className="flex-1 flex flex-col justify-between overflow-hidden">
-                  <div className="flex-1 p-3.5 overflow-y-auto flex flex-col justify-between">
+                <div className="flex-1 flex flex-col justify-between overflow-hidden bg-[#090D14]">
+                  <div className="flex-1 p-3 overflow-y-auto flex flex-col justify-between">
+                    {/* TAB 1: ASSISTANT (VoiceChatScreen.kt) */}
                     {mangalTab === 'voice_chat' && (
-                      <>
-                        {/* Compose TopAppBar with MANGAL Brand Icon */}
-                        <div className="pb-2.5 border-b border-slate-800/80 flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <MangalAppIconSvg
-                              size={36}
-                              pulsing={wakeTriggeredListening || continuousRealMicActive}
-                            />
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-xs font-bold text-white truncate">
-                                  MANGAL
-                                </span>
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">
-                                  Play Protect OK
-                                </span>
-                              </div>
-                              <div className="text-[10px] font-mono text-slate-400 truncate">
-                                Wake Word: &ldquo;Mangal&rdquo; · Offline GGUF
+                      <div className="flex-1 flex flex-col justify-between space-y-2">
+                        {/* Top Header Card */}
+                        <div
+                          className={`p-3 rounded-2xl bg-[#111824] border transition-colors space-y-2 ${
+                            wakeTriggeredListening ||
+                            continuousRealMicActive ||
+                            awaitingFollowUpAfterMangal
+                              ? 'border-amber-400'
+                              : 'border-[#1E293B]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <MangalAppIconSvg
+                                size={38}
+                                pulsing={
+                                  wakeTriggeredListening ||
+                                  continuousRealMicActive ||
+                                  awaitingFollowUpAfterMangal ||
+                                  wakeServiceRunning
+                                }
+                              />
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs font-extrabold text-white tracking-tight">
+                                    MANGAL
+                                  </span>
+                                  <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-[#062E22] text-[#10B981]">
+                                    100% OFFLINE
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-300 truncate">
+                                  {awaitingFollowUpAfterMangal
+                                    ? 'Wake Word "Mangal" Triggered · Speak command now'
+                                    : continuousRealMicActive
+                                    ? 'Listening live... Speak your command'
+                                    : 'Hands-Free Active · Say "Mangal" or Tap Mic'}
+                                </div>
                               </div>
                             </div>
-                          </div>
 
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => setOsView('PIXEL_LAUNCHER')}
-                              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-mono text-slate-300 hover:text-white cursor-pointer"
-                              title="View MANGAL Icon on Pixel Home Screen"
-                            >
-                              App Icon
-                            </button>
                             <button
                               onClick={() => {
                                 setChatHistory([
                                   {
                                     id: `clr-${Date.now()}`,
                                     role: 'assistant',
-                                    text: 'SQLCipher AES-256 history wiped. Say "Mangal" to speak.',
+                                    text: 'Encrypted history cleared. Say "Mangal" or tap any quick chip.',
                                     timestamp: new Date().toLocaleTimeString([], {
                                       hour: '2-digit',
                                       minute: '2-digit',
@@ -1352,83 +1613,110 @@ export default function AndroidEmulatorWorkspace({
                                     })
                                   }
                                 ]);
-                                appendLog('ChatRepository', 'I', 'clearConversationMemory() executed.');
                               }}
-                              className="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-white cursor-pointer"
-                              title="Clear Encrypted Room History"
+                              className="px-2 py-1 rounded-lg border border-[#1E293B] text-[10px] text-slate-300 hover:text-white cursor-pointer"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              Clear
                             </button>
                           </div>
-                        </div>
 
-                        {/* Live Wake Word & 16kHz AudioRecord Waveform Status Bar */}
-                        <div
-                          className={`mt-2 px-3 py-2 rounded-xl border text-[11px] font-mono flex items-center justify-between gap-2 transition-colors ${
-                            wakeTriggeredListening || continuousRealMicActive
-                              ? 'bg-amber-500/15 border-amber-400/60 text-amber-200'
-                              : wakeServiceRunning
-                              ? 'bg-slate-900/90 border-slate-800 text-slate-300'
-                              : 'bg-slate-900/40 border-slate-800/50 text-slate-500'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 truncate">
-                            <Radio
-                              className={`w-3.5 h-3.5 shrink-0 ${
-                                wakeTriggeredListening || continuousRealMicActive
-                                  ? 'text-amber-400 animate-ping'
-                                  : wakeServiceRunning
-                                  ? 'text-emerald-400'
-                                  : 'text-slate-600'
-                              }`}
-                            />
-                            <span className="truncate">
-                              {continuousRealMicActive
-                                ? liveHeardTranscript
+                          {/* Active Engine Bar + Quick Link to Custom GGUF */}
+                          <div className="px-2.5 py-1.5 rounded-xl bg-[#080B11] flex items-center justify-between gap-2 text-[10px] font-mono">
+                            <span className="text-slate-300 truncate">
+                              Engine: {activeLlmModel}
+                            </span>
+                            <button
+                              onClick={() => setMangalTab('custom_model')}
+                              className="text-amber-400 font-sans font-bold hover:underline shrink-0 cursor-pointer"
+                            >
+                              + Custom GGUF
+                            </button>
+                          </div>
+
+                          {/* Live Voice Acoustic Level & Partial Speech Transcript Pill */}
+                          <div
+                            className={`px-2.5 py-2 rounded-xl flex items-center justify-between gap-2 text-[10px] font-mono ${
+                              wakeTriggeredListening ||
+                              continuousRealMicActive ||
+                              awaitingFollowUpAfterMangal
+                                ? 'bg-[#291D0A] text-amber-200'
+                                : 'bg-[#0D131F] text-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <span
+                                className={`w-2 h-2 rounded-full shrink-0 ${
+                                  wakeTriggeredListening ||
+                                  continuousRealMicActive ||
+                                  awaitingFollowUpAfterMangal
+                                    ? 'bg-amber-400 animate-ping'
+                                    : wakeServiceRunning
+                                    ? 'bg-emerald-400'
+                                    : 'bg-slate-500'
+                                }`}
+                              />
+                              <span className="truncate">
+                                {liveHeardTranscript
                                   ? `Hearing: "${liveHeardTranscript}"`
-                                  : 'Mic Live: Say "Mangal, <command>" out loud...'
-                                : wakeTriggeredListening
-                                ? 'Wake Word "Mangal" Triggered! Capturing...'
-                                : wakeServiceRunning
-                                ? 'Standby: Say "Mangal" (like "Hey Google")'
-                                : 'Wake Word Paused'}
+                                  : awaitingFollowUpAfterMangal
+                                  ? 'Listening for command after "Mangal"...'
+                                  : wakeServiceRunning
+                                  ? 'Say "Mangal, turn on the flashlight" or Tap Mic'
+                                  : 'Wake word paused — Tap Mic below'}
+                              </span>
+                            </div>
+                            <span className="text-amber-400 shrink-0 tabular-nums">
+                              LVL {Math.round(rmsEnergy * 100)}%
                             </span>
                           </div>
-                          <span className="text-[9px] text-slate-400 shrink-0 tabular-nums">
-                            RMS:{rmsEnergy.toFixed(2)}
-                          </span>
                         </div>
 
-                        {/* Chat Messages LazyColumn */}
-                        <div className="flex-1 overflow-y-auto py-2.5 space-y-2.5 pr-0.5">
+                        {/* 1-Tap Quick Command Chips (Matches VoiceChatScreen.kt) */}
+                        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                          {[
+                            ['Flashlight ON', 'Mangal, turn on the flashlight'],
+                            ['Flashlight OFF', 'Mangal, turn off the flashlight'],
+                            ['Alarm 6:30 AM', 'Mangal, set an alarm for 6:30 AM'],
+                            ['5m Timer', 'Mangal, set a timer for 5 minutes'],
+                            ['Volume Up', 'Mangal, turn volume up'],
+                            ['Open YouTube', 'Mangal, open YouTube']
+                          ].map(([label, cmd]) => (
+                            <button
+                              key={label}
+                              onClick={() => executeFullVoiceLoop(cmd, true)}
+                              className="px-2.5 py-1 rounded-full bg-[#111824] border border-[#1E293B] hover:border-amber-400/60 text-[10px] font-semibold text-amber-200 whitespace-nowrap cursor-pointer shrink-0"
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Conversation & Tool Execution LazyColumn */}
+                        <div className="flex-1 overflow-y-auto space-y-2 pr-0.5 max-h-[295px]">
                           {chatHistory.map((turn) => (
                             <div
                               key={turn.id}
-                              className={`p-2.5 rounded-xl border text-xs space-y-1.5 ${
+                              className={`p-2.5 rounded-2xl border text-xs space-y-1.5 ${
                                 turn.role === 'user'
-                                  ? 'bg-slate-900/95 border-slate-800 ml-5'
-                                  : 'bg-slate-950/95 border-slate-800/90 mr-2'
+                                  ? 'bg-[#1E293B] border-[#334155] ml-6'
+                                  : 'bg-[#111824] border-[#1E293B] mr-2'
                               }`}
                             >
                               <div className="flex items-center justify-between text-[9px] font-mono text-slate-400 tabular-nums">
                                 <span
                                   className={
                                     turn.role === 'user'
-                                      ? 'text-amber-300 font-semibold'
-                                      : 'text-emerald-400 font-semibold'
+                                      ? 'text-amber-300 font-bold'
+                                      : 'text-emerald-400 font-bold'
                                   }
                                 >
                                   {turn.role === 'user'
                                     ? turn.triggeredByWakeWord
                                       ? 'YOU (WAKE: "MANGAL")'
-                                      : 'YOU (PTT)'
+                                      : 'YOU'
                                     : 'MANGAL (ON-DEVICE)'}
                                 </span>
-                                <span>
-                                  {turn.sttLatencyMs ? `STT ${turn.sttLatencyMs}ms · ` : ''}
-                                  {turn.llmTokensPerSec ? `${turn.llmTokensPerSec} tok/s · ` : ''}
-                                  {turn.timestamp}
-                                </span>
+                                <span>{turn.timestamp}</span>
                               </div>
 
                               {turn.toolCallJson && (
@@ -1441,7 +1729,7 @@ export default function AndroidEmulatorWorkspace({
                                 <div className="p-2 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-[10px] font-mono text-emerald-300 flex items-center justify-between gap-2">
                                   <div className="min-w-0">
                                     <div className="font-semibold">
-                                      Tool → {turn.toolExecutionResult.toolName}
+                                      TOOL: {turn.toolExecutionResult.toolName}
                                     </div>
                                     <div className="text-[9px] opacity-90 truncate">
                                       {turn.toolExecutionResult.summary}
@@ -1465,13 +1753,13 @@ export default function AndroidEmulatorWorkspace({
                           ))}
                         </div>
 
-                        {/* Bottom Compose Input & Hands-Free Mic Bar */}
-                        <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                        {/* Bottom Input + Prominent Tap Mic to Speak & "Mangal" Wake Toggle */}
+                        <div className="pt-1.5 border-t border-[#1E293B] space-y-1.5">
                           <form
                             onSubmit={(e) => {
                               e.preventDefault();
                               if (inputDraft.trim()) {
-                                executeFullVoiceLoop(inputDraft);
+                                executeFullVoiceLoop(inputDraft, false);
                                 setInputDraft('');
                               }
                             }}
@@ -1481,22 +1769,22 @@ export default function AndroidEmulatorWorkspace({
                               type="text"
                               value={inputDraft}
                               onChange={(e) => setInputDraft(e.target.value)}
-                              placeholder='Type "Mangal, set alarm for 6:30 AM"...'
-                              className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
+                              placeholder='Type "turn on flashlight" or "Mangal"...'
+                              className="flex-1 bg-[#111824] border border-[#1E293B] rounded-xl px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
                             />
                             <button
                               type="submit"
-                              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 cursor-pointer"
+                              className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs cursor-pointer"
                             >
-                              <Send className="w-3.5 h-3.5" />
+                              Send
                             </button>
                           </form>
 
-                          <div className="grid grid-cols-2 gap-1.5">
+                          <div className="grid grid-cols-12 gap-1.5">
                             <button
                               onClick={toggleRealMicWakeLoop}
-                              className={`py-2 px-2.5 rounded-xl text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
-                                continuousRealMicActive
+                              className={`col-span-7 py-2 px-2.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                                continuousRealMicActive || awaitingFollowUpAfterMangal
                                   ? 'bg-rose-500 text-white'
                                   : 'bg-amber-400 text-slate-950 hover:bg-amber-300'
                               }`}
@@ -1504,91 +1792,380 @@ export default function AndroidEmulatorWorkspace({
                               <Mic className="w-3.5 h-3.5" />
                               <span>
                                 {continuousRealMicActive
-                                  ? 'Stop Real Mic'
-                                  : 'Say "Mangal" (Live Mic)'}
+                                  ? 'Listening... Speak!'
+                                  : 'Tap Mic to Speak'}
                               </span>
                             </button>
 
                             <button
-                              onClick={() =>
-                                executeFullVoiceLoop(
-                                  'Mangal, set an alarm for 6:30 AM tomorrow labeled Morning Workout',
-                                  true
-                                )
-                              }
-                              className="py-2 px-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[11px] font-medium cursor-pointer"
+                              onClick={() => setWakeServiceRunning((v) => !v)}
+                              className={`col-span-5 py-2 px-2 rounded-xl border text-[10px] font-bold cursor-pointer transition-colors ${
+                                wakeServiceRunning
+                                  ? 'border-emerald-500/60 bg-emerald-500/10 text-emerald-300'
+                                  : 'border-slate-700 bg-slate-900 text-slate-400'
+                              }`}
                             >
-                              Simulate &ldquo;Mangal&rdquo; Wake
+                              {wakeServiceRunning ? '"Mangal" Wake: ON' : '"Mangal" Wake: OFF'}
                             </button>
                           </div>
-                        </div>
-                      </>
-                    )}
-
-                    {mangalTab === 'model_manager' && (
-                      <div className="space-y-2.5">
-                        <div>
-                          <h2 className="text-xs font-semibold text-white">
-                            Offline GGUF & Whisper Model Manager
-                          </h2>
-                          <p className="text-[10px] text-slate-400">
-                            Context.filesDir/models/ (Read-only, Play Protect DCL Safe)
-                          </p>
-                        </div>
-
-                        {modelErrorBanner && (
-                          <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-500/40 text-[10px] text-rose-200">
-                            {modelErrorBanner}
-                          </div>
-                        )}
-
-                        <div className="space-y-2">
-                          {models.map((m) => (
-                            <div
-                              key={m.modelId}
-                              className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5"
-                            >
-                              <div className="flex items-center justify-between">
-                                <span className="text-[11px] font-semibold text-white">
-                                  {m.displayName}
-                                </span>
-                                {m.isActive && (
-                                  <span className="text-[9px] font-mono text-emerald-400">
-                                    ACTIVE
-                                  </span>
-                                )}
-                              </div>
-                              <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
-                                <span>
-                                  {m.sizeMb} MB · Min {m.requiredRamMb} MB RAM
-                                </span>
-                                <button
-                                  onClick={() => handleModelAction(m)}
-                                  className="px-2 py-0.5 rounded bg-amber-400 text-slate-950 font-sans font-semibold text-[10px] cursor-pointer"
-                                >
-                                  {m.isActive ? 'Loaded' : 'Activate'}
-                                </button>
-                              </div>
-                            </div>
-                          ))}
                         </div>
                       </div>
                     )}
 
-                    {mangalTab === 'settings' && (
-                      <div className="space-y-3">
-                        <div>
-                          <h2 className="text-xs font-semibold text-white">
-                            Settings, Native TTS & Play Protect
-                          </h2>
-                          <p className="text-[10px] text-slate-400">
-                            SQLCipher AES-256 · AndroidNativeTtsSpeaker
-                          </p>
+                    {/* TAB 2: MODELS WITH LIVE DOWNLOAD PROGRESS BARS (ModelManagerScreen.kt) */}
+                    {mangalTab === 'model_manager' && (
+                      <div className="space-y-2.5">
+                        <div className="p-3 rounded-2xl bg-[#111824] border border-[#1E293B] space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <h2 className="text-xs font-extrabold text-white">
+                                Offline AI Model Manager
+                              </h2>
+                              <p className="text-[10px] text-slate-400">
+                                Resumable HTTP Range downloads with live progress bar & SHA-256
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => setMangalTab('custom_model')}
+                              className="px-2.5 py-1.5 rounded-xl bg-amber-400 text-slate-950 font-bold text-[10px] shrink-0 cursor-pointer"
+                            >
+                              + Custom Model
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-800/80">
+                            <span className="text-slate-300">Restrict Downloads to Wi-Fi Only</span>
+                            <button
+                              onClick={() => setWifiOnlyGuard((v) => !v)}
+                              className={`px-2 py-0.5 rounded font-mono text-[10px] cursor-pointer ${
+                                wifiOnlyGuard
+                                  ? 'bg-amber-400 text-slate-950 font-bold'
+                                  : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
+                              {wifiOnlyGuard ? 'ON' : 'OFF (Mobile Data OK)'}
+                            </button>
+                          </div>
+
+                          {modelStatusBanner && (
+                            <div className="p-2 rounded-xl bg-[#23190B] text-[10px] font-mono text-amber-200">
+                              {modelStatusBanner}
+                            </div>
+                          )}
                         </div>
 
-                        <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2.5 text-xs">
-                          <div className="flex items-center justify-between">
-                            <span>Hands-Free &ldquo;Mangal&rdquo; Service</span>
+                        {/* Model Cards with Real-Time Progress Bars */}
+                        <div className="space-y-2 max-h-[430px] overflow-y-auto pr-0.5">
+                          {models.map((m) => {
+                            const prog = downloadProgressMap[m.modelId];
+                            const isDownloading =
+                              prog?.status === 'DOWNLOADING' ||
+                              prog?.status === 'CONNECTING' ||
+                              prog?.status === 'VERIFYING_CHECKSUM';
+                            const isDownloaded = m.downloaded || prog?.status === 'COMPLETED';
+                            const pct = prog
+                              ? Math.min(100, Math.round((prog.bytesDownloadedMb / prog.totalMb) * 100))
+                              : isDownloaded
+                              ? 100
+                              : 0;
+
+                            return (
+                              <div
+                                key={m.modelId}
+                                className={`p-3 rounded-2xl bg-[#111824] border space-y-2 ${
+                                  m.isActive
+                                    ? 'border-emerald-400'
+                                    : isDownloading
+                                    ? 'border-amber-400'
+                                    : 'border-[#1E293B]'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] font-bold text-white truncate">
+                                    {m.displayName}
+                                  </span>
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold shrink-0 ${
+                                      m.isActive
+                                        ? 'bg-[#062E22] text-emerald-400'
+                                        : isDownloading
+                                        ? 'bg-[#291D0A] text-amber-400'
+                                        : isDownloaded
+                                        ? 'bg-slate-800 text-slate-300'
+                                        : 'bg-[#090D14] text-slate-400'
+                                    }`}
+                                  >
+                                    {m.isActive
+                                      ? 'ACTIVE'
+                                      : prog?.status === 'CONNECTING'
+                                      ? 'CONNECTING...'
+                                      : prog?.status === 'DOWNLOADING'
+                                      ? `DOWNLOADING ${pct}%`
+                                      : prog?.status === 'VERIFYING_CHECKSUM'
+                                      ? 'VERIFYING SHA-256...'
+                                      : prog?.status === 'PAUSED'
+                                      ? 'PAUSED'
+                                      : isDownloaded
+                                      ? 'DOWNLOADED'
+                                      : 'NOT DOWNLOADED'}
+                                  </span>
+                                </div>
+
+                                <div className="text-[10px] font-mono text-slate-400">
+                                  {m.category} · {m.quantization} · {m.sizeMb} MB · Min{' '}
+                                  {m.requiredRamMb} MB RAM
+                                </div>
+
+                                {/* LIVE PROGRESS BAR */}
+                                {prog && prog.status !== 'IDLE' && (
+                                  <div className="space-y-1">
+                                    <div className="w-full h-2 rounded-full bg-[#080B11] overflow-hidden">
+                                      <div
+                                        className={`h-full transition-all duration-200 ${
+                                          prog.status === 'FAILED'
+                                            ? 'bg-rose-500'
+                                            : prog.status === 'COMPLETED'
+                                            ? 'bg-emerald-400'
+                                            : 'bg-amber-400'
+                                        }`}
+                                        style={{ width: `${pct}%` }}
+                                      />
+                                    </div>
+                                    <div className="flex items-center justify-between text-[10px] font-mono">
+                                      <span className="text-amber-200 tabular-nums">
+                                        {prog.bytesDownloadedMb} MB / {prog.totalMb} MB ({pct}%)
+                                      </span>
+                                      <span className="text-slate-400 tabular-nums">
+                                        {isDownloading
+                                          ? `${prog.speedMbPerSec.toFixed(1)} MB/s`
+                                          : prog.status}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div className="flex items-center gap-2 pt-0.5">
+                                  {isDownloading ? (
+                                    <button
+                                      onClick={() => pauseModelDownload(m.modelId)}
+                                      className="flex-1 py-1.5 rounded-xl bg-rose-500 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <Pause className="w-3 h-3" />
+                                      <span>Pause / Cancel</span>
+                                    </button>
+                                  ) : (
+                                    <button
+                                      onClick={() =>
+                                        isDownloaded
+                                          ? activateDownloadedModel(m)
+                                          : startOrResumeModelDownload(m)
+                                      }
+                                      className={`flex-1 py-1.5 rounded-xl font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer ${
+                                        m.isActive
+                                          ? 'bg-emerald-400 text-slate-950'
+                                          : 'bg-amber-400 text-slate-950 hover:bg-amber-300'
+                                      }`}
+                                    >
+                                      <Download className="w-3 h-3" />
+                                      <span>
+                                        {m.isActive
+                                          ? 'Active in Engine'
+                                          : isDownloaded
+                                          ? 'Activate Model'
+                                          : prog?.status === 'PAUSED'
+                                          ? 'Resume Download'
+                                          : `Download (${m.sizeMb} MB)`}
+                                      </span>
+                                    </button>
+                                  )}
+
+                                  {(isDownloaded || prog?.status === 'PAUSED') && (
+                                    <button
+                                      onClick={() => deleteModelFromDisk(m)}
+                                      className="px-2.5 py-1.5 rounded-xl border border-[#1E293B] text-rose-400 hover:bg-rose-950/40 text-[11px] font-semibold cursor-pointer"
+                                    >
+                                      Delete
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* TAB 3: CUSTOM MODEL SELECTOR (CustomModelScreen.kt) */}
+                    {mangalTab === 'custom_model' && (
+                      <div className="space-y-2.5 max-h-[555px] overflow-y-auto pr-0.5">
+                        <div className="p-3 rounded-2xl bg-[#111824] border border-amber-400/80 space-y-1.5">
+                          <div className="text-xs font-extrabold text-white">
+                            Custom Model Selector (.gguf / .bin)
+                          </div>
+                          <p className="text-[10px] text-slate-300 leading-relaxed">
+                            Bring your own GGUF LLM (DeepSeek, Llama 3.2, Qwen, Gemma, Mistral) or
+                            Whisper .bin file from phone storage or a custom direct HTTPS URL.
+                          </p>
+                          {modelStatusBanner && (
+                            <div className="p-2 rounded-xl bg-[#23190B] text-[10px] font-mono text-amber-200">
+                              {modelStatusBanner}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 1. Select Category & Optional Name */}
+                        <div className="p-3 rounded-2xl bg-[#111824] border border-[#1E293B] space-y-2">
+                          <div className="text-[11px] font-bold text-amber-400">
+                            1. Select Custom Model Type & Optional Name
+                          </div>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {(
+                              [
+                                ['LLM_GGUF', 'LLM (.gguf)'],
+                                ['STT_WHISPER', 'Whisper STT (.bin)']
+                              ] as const
+                            ).map(([cat, label]) => (
+                              <button
+                                key={cat}
+                                onClick={() => setCustomCategory(cat)}
+                                className={`py-1.5 rounded-xl text-[11px] font-bold cursor-pointer ${
+                                  customCategory === cat
+                                    ? 'bg-amber-400 text-slate-950'
+                                    : 'bg-[#080B11] text-slate-400'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          <input
+                            type="text"
+                            value={customModelName}
+                            onChange={(e) => setCustomModelName(e.target.value)}
+                            placeholder="Optional Display Name (e.g. DeepSeek R1 1.5B Q4_K_M)"
+                            className="w-full bg-[#080B11] border border-[#1E293B] rounded-xl px-2.5 py-1.5 text-[11px] text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+
+                        {/* 2. Import Local .gguf / .bin File from Phone Storage */}
+                        <div className="p-3 rounded-2xl bg-[#111824] border border-[#1E293B] space-y-2">
+                          <div className="text-[11px] font-bold text-white">
+                            2. Import Local .gguf / .bin File from Phone Storage
+                          </div>
+                          <p className="text-[10px] text-slate-400">
+                            Uses Android SAF OpenDocument() picker, copies into encrypted app
+                            storage, verifies SHA-256, and activates immediately.
+                          </p>
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept=".gguf,.bin,.onnx,*/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                const sizeMb = Math.max(
+                                  45,
+                                  Math.round(file.size / (1024 * 1024)) || 890
+                                );
+                                handleImportCustomModelFile(file.name, sizeMb);
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="w-full py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <FolderOpen className="w-3.5 h-3.5" />
+                            <span>Browse Phone Storage for .gguf / .bin File</span>
+                          </button>
+
+                          {/* Instant 1-Tap Sample Custom GGUF Presets for Testing */}
+                          <div className="pt-1 space-y-1">
+                            <div className="text-[9px] font-mono text-slate-400">
+                              Or test instant SAF local import with a sample custom GGUF:
+                            </div>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <button
+                                onClick={() =>
+                                  handleImportCustomModelFile(
+                                    'DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf',
+                                    1120
+                                  )
+                                }
+                                className="p-1.5 rounded-lg bg-[#080B11] border border-slate-800 hover:border-amber-400/50 text-[10px] text-amber-200 font-mono truncate cursor-pointer"
+                              >
+                                + DeepSeek-R1-1.5B.gguf
+                              </button>
+                              <button
+                                onClick={() =>
+                                  handleImportCustomModelFile(
+                                    'Llama-3.2-3B-Instruct-Q4_K_M.gguf',
+                                    2020
+                                  )
+                                }
+                                className="p-1.5 rounded-lg bg-[#080B11] border border-slate-800 hover:border-amber-400/50 text-[10px] text-amber-200 font-mono truncate cursor-pointer"
+                              >
+                                + Llama-3.2-3B.gguf
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 3. Or Download from Custom Direct HTTPS URL */}
+                        <div className="p-3 rounded-2xl bg-[#111824] border border-[#1E293B] space-y-2">
+                          <div className="text-[11px] font-bold text-white flex items-center gap-1.5">
+                            <Link2 className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>3. Or Download from Custom Direct HTTPS URL</span>
+                          </div>
+                          <input
+                            type="text"
+                            value={customModelUrl}
+                            onChange={(e) => setCustomModelUrl(e.target.value)}
+                            placeholder="https://huggingface.co/.../resolve/main/model.gguf"
+                            className="w-full bg-[#080B11] border border-[#1E293B] rounded-xl px-2.5 py-1.5 text-[10px] font-mono text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
+                          />
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <button
+                              onClick={() => handleDownloadCustomUrlModel()}
+                              className="py-1.5 rounded-xl bg-emerald-400 text-slate-950 font-bold text-[10px] cursor-pointer"
+                            >
+                              Download Custom URL
+                            </button>
+                            <button
+                              onClick={() => {
+                                handleDownloadCustomUrlModel(
+                                  'https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q4_K_M.gguf',
+                                  'SmolLM2 1.7B Instruct'
+                                );
+                                setMangalTab('model_manager');
+                              }}
+                              className="py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold text-[10px] cursor-pointer"
+                            >
+                              Demo HuggingFace URL DL
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* TAB 4: SETTINGS (SettingsScreen.kt) */}
+                    {mangalTab === 'settings' && (
+                      <div className="space-y-3">
+                        <div className="p-3 rounded-2xl bg-[#111824] border border-[#1E293B] space-y-2.5 text-xs">
+                          <div>
+                            <h2 className="text-xs font-extrabold text-white">
+                              Native TTS Voice & Thermal Guard
+                            </h2>
+                            <p className="text-[10px] text-emerald-400">
+                              100% Offline Guarantee · SQLCipher AES-256 · Zero Telemetry
+                            </p>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1">
+                            <span className="text-[11px] text-slate-200">
+                              Hands-Free &ldquo;Mangal&rdquo; Service
+                            </span>
                             <button
                               onClick={() => setWakeServiceRunning((v) => !v)}
                               className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] cursor-pointer"
@@ -1599,7 +2176,7 @@ export default function AndroidEmulatorWorkspace({
 
                           <div>
                             <div className="flex justify-between text-[10px] font-mono text-slate-400">
-                              <span>Native TTS Rate</span>
+                              <span>Speech Rate</span>
                               <span>{speechRate.toFixed(2)}x</span>
                             </div>
                             <input
@@ -1613,9 +2190,36 @@ export default function AndroidEmulatorWorkspace({
                             />
                           </div>
 
+                          <div>
+                            <div className="flex justify-between text-[10px] font-mono text-slate-400">
+                              <span>Voice Pitch</span>
+                              <span>{speechPitch.toFixed(2)}x</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0.6"
+                              max="1.5"
+                              step="0.05"
+                              value={speechPitch}
+                              onChange={(e) => setSpeechPitch(parseFloat(e.target.value))}
+                              className="w-full accent-amber-400"
+                            />
+                          </div>
+
+                          <button
+                            onClick={() =>
+                              speakViaAndroidTts(
+                                'MANGAL offline voice synthesis is active and operating locally on your device.'
+                              )
+                            }
+                            className="w-full py-2 rounded-xl bg-amber-400 text-slate-950 font-bold text-[11px] cursor-pointer"
+                          >
+                            Test Offline TTS Voice Now
+                          </button>
+
                           <button
                             onClick={() => setOsView('PLAY_PROTECT_SCANNER')}
-                            className="w-full py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] font-semibold cursor-pointer"
+                            className="w-full py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] font-semibold cursor-pointer"
                           >
                             Open Google Play Protect Scanner
                           </button>
@@ -1624,27 +2228,40 @@ export default function AndroidEmulatorWorkspace({
                     )}
                   </div>
 
-                  {/* Compose Bottom NavigationBar */}
-                  <div className="grid grid-cols-3 border-t border-slate-800 bg-slate-950/95 py-2 px-2">
+                  {/* 4-TAB COMPOSE BOTTOM NAVIGATION BAR (Matches MangalNavGraph.kt) */}
+                  <div className="grid grid-cols-4 border-t border-[#1E293B] bg-[#080B11] py-1.5 px-1.5 gap-1">
                     {(
                       [
-                        ['voice_chat', 'Assistant'],
-                        ['model_manager', 'Models'],
-                        ['settings', 'Settings']
+                        ['voice_chat', 'Assistant', 'MIC'],
+                        ['model_manager', 'Models', 'AI'],
+                        ['custom_model', 'Custom GGUF', '+'],
+                        ['settings', 'Settings', 'CFG']
                       ] as const
-                    ).map(([tab, label]) => (
-                      <button
-                        key={tab}
-                        onClick={() => setMangalTab(tab)}
-                        className={`py-1 text-[11px] font-medium rounded-lg cursor-pointer ${
-                          mangalTab === tab
-                            ? 'text-amber-300 bg-amber-500/10 font-semibold'
-                            : 'text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
+                    ).map(([tab, label, badge]) => {
+                      const active = mangalTab === tab;
+                      return (
+                        <button
+                          key={tab}
+                          onClick={() => setMangalTab(tab)}
+                          className={`py-1 px-1 rounded-xl flex flex-col items-center gap-0.5 cursor-pointer transition-colors ${
+                            active
+                              ? 'bg-[#23190B] text-amber-400 font-bold'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          <span
+                            className={`w-5 h-5 rounded-full text-[8px] font-mono font-bold flex items-center justify-center ${
+                              active
+                                ? 'bg-amber-400 text-slate-950'
+                                : 'bg-[#111824] text-slate-400'
+                            }`}
+                          >
+                            {badge}
+                          </span>
+                          <span className="text-[10px] truncate">{label}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1733,51 +2350,72 @@ export default function AndroidEmulatorWorkspace({
 
       {/* RIGHT COLUMN: LIVE ADB LOGCAT, QUICK VOICE TRIGGERS & EMULATOR CONTROLS (6 cols) */}
       <div className="lg:col-span-6 space-y-5">
-        {/* Instant Voice Utterance Triggers + Launcher / Play Protect Switchers */}
+        {/* Instant Feature Switcher & Voice Utterance Triggers */}
         <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-base font-semibold text-white font-display">
-                Emulator Interactive Controls & Voice Injection
+                10/10 Upgraded APK + Interactive Emulator Controls
               </h2>
               <p className="text-xs text-slate-400">
-                Trigger hands-free <strong>&ldquo;Mangal&rdquo;</strong> wake phrases, inspect the
-                custom Launcher Icon on the Pixel Home Screen, or run the Play Protect scanner.
+                Test the new <strong>Live Download Progress Bar</strong>, the{' '}
+                <strong>Custom GGUF Model Selector</strong>, and continuous{' '}
+                <strong>&ldquo;Mangal&rdquo;</strong> voice listening.
               </p>
             </div>
           </div>
 
-          {/* Emulator View Mode Switcher */}
-          <div className="grid grid-cols-3 gap-2">
+          {/* Direct Jump to the 4 Upgraded App Screens */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <button
-              onClick={() => setOsView('MANGAL_APP')}
-              className={`py-2 px-3 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
-                osView === 'MANGAL_APP'
+              onClick={() => {
+                setOsView('MANGAL_APP');
+                setMangalTab('voice_chat');
+              }}
+              className={`py-2 px-2.5 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
+                osView === 'MANGAL_APP' && mangalTab === 'voice_chat'
                   ? 'bg-amber-400 text-slate-950'
                   : 'bg-slate-950 border border-slate-800 text-slate-300 hover:text-white'
               }`}
             >
-              1. MANGAL Assistant UI
+              1. Assistant UI
+            </button>
+            <button
+              onClick={() => {
+                setOsView('MANGAL_APP');
+                setMangalTab('model_manager');
+              }}
+              className={`py-2 px-2.5 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
+                osView === 'MANGAL_APP' && mangalTab === 'model_manager'
+                  ? 'bg-amber-400 text-slate-950'
+                  : 'bg-slate-950 border border-slate-800 text-slate-300 hover:text-white'
+              }`}
+            >
+              2. Progress Bar DL
+            </button>
+            <button
+              onClick={() => {
+                setOsView('MANGAL_APP');
+                setMangalTab('custom_model');
+              }}
+              className={`py-2 px-2.5 rounded-xl text-xs font-semibold cursor-pointer transition-colors flex items-center justify-center gap-1 ${
+                osView === 'MANGAL_APP' && mangalTab === 'custom_model'
+                  ? 'bg-amber-400 text-slate-950'
+                  : 'bg-slate-950 border border-amber-500/40 text-amber-300 hover:text-white'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>3. Custom GGUF</span>
             </button>
             <button
               onClick={() => setOsView('PIXEL_LAUNCHER')}
-              className={`py-2 px-3 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
+              className={`py-2 px-2.5 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
                 osView === 'PIXEL_LAUNCHER'
                   ? 'bg-amber-400 text-slate-950'
                   : 'bg-slate-950 border border-slate-800 text-slate-300 hover:text-white'
               }`}
             >
-              2. Pixel Home (App Icon)
-            </button>
-            <button
-              onClick={() => setOsView('PLAY_PROTECT_SCANNER')}
-              className={`py-2 px-3 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
-                osView === 'PLAY_PROTECT_SCANNER'
-                  ? 'bg-emerald-400 text-slate-950'
-                  : 'bg-slate-950 border border-slate-800 text-emerald-300 hover:text-white'
-              }`}
-            >
-              3. Play Protect Scanner
+              4. Home Icon
             </button>
           </div>
 
@@ -1785,29 +2423,28 @@ export default function AndroidEmulatorWorkspace({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {[
               {
-                title: '"Mangal" (Wake Only — Like "Hey Google")',
+                title: '"Mangal" (Wake Only — Prompts & Listens)',
                 utterance: 'Mangal'
-              },
-              {
-                title: '"Mangal, set alarm for 6:30 AM"',
-                utterance: 'Mangal, set an alarm for 6:30 AM tomorrow labeled Morning Workout'
               },
               {
                 title: '"Mangal, turn on the flashlight"',
                 utterance: 'Mangal, turn on the flashlight'
               },
               {
+                title: '"Mangal, set alarm for 6:30 AM"',
+                utterance: 'Mangal, set an alarm for 6:30 AM tomorrow labeled Morning Workout'
+              },
+              {
+                title: '"Mangal, set a timer for 5 minutes"',
+                utterance: 'Mangal, set a timer for 5 minutes'
+              },
+              {
                 title: '"Mangal, send SMS to +1-555-0192"',
                 utterance: 'Mangal, send an SMS to +1-555-0192 saying Running 10 minutes late'
               },
               {
-                title: '"Mangal, schedule Design Review"',
-                utterance:
-                  'Mangal, create a calendar event for Design Review at 3 PM for 45 minutes'
-              },
-              {
-                title: '"Mangal, explain lithium-ion batteries"',
-                utterance: 'Mangal, explain how lithium-ion batteries work'
+                title: '"Mangal, open YouTube"',
+                utterance: 'Mangal, open YouTube'
               }
             ].map((item) => (
               <button
@@ -1829,7 +2466,9 @@ export default function AndroidEmulatorWorkspace({
           <div className="px-4 py-2.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between">
             <div className="flex items-center gap-2 text-xs font-mono text-slate-200">
               <Terminal className="w-3.5 h-3.5 text-amber-400" />
-              <span>adb logcat -s MangalApplication LlamaJniBridge WhisperJniBridge</span>
+              <span>
+                adb logcat -s MangalSpeechListener ResumableDownloader CustomModelScreen
+              </span>
             </div>
             <button
               onClick={() => setLogcat([])}
@@ -1838,7 +2477,7 @@ export default function AndroidEmulatorWorkspace({
               Clear Logcat
             </button>
           </div>
-          <div className="p-3.5 h-[260px] overflow-y-auto font-mono text-[11px] space-y-1.5 leading-relaxed">
+          <div className="p-3.5 h-[250px] overflow-y-auto font-mono text-[11px] space-y-1.5 leading-relaxed">
             {logcat.map((entry) => (
               <div key={entry.id} className="flex items-start gap-2">
                 <span className="text-slate-500 shrink-0 tabular-nums">{entry.timestamp}</span>
@@ -1859,37 +2498,39 @@ export default function AndroidEmulatorWorkspace({
           </div>
         </div>
 
-        {/* Quick Links to Inspect the Underlying Android Files */}
+        {/* Quick Links to Inspect the Upgraded Android Files */}
         <div className="p-4 rounded-2xl bg-slate-900/50 border border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <span className="text-slate-400">Jump to Android Kotlin / XML source:</span>
+          <span className="text-slate-400">Inspect Upgraded Android Source:</span>
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() =>
                 onInspectSourceFile(
-                  'app/src/main/java/ai/mangal/assistant/service/MangalWakeWordForegroundService.kt'
+                  'app/src/main/java/ai/mangal/assistant/ui/custom/CustomModelScreen.kt'
                 )
               }
               className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-amber-300 font-mono text-[11px] hover:border-amber-400/50 cursor-pointer"
             >
-              MangalWakeWordForegroundService.kt
-            </button>
-            <button
-              onClick={() =>
-                onInspectSourceFile('app/src/main/res/drawable/ic_launcher_foreground.xml')
-              }
-              className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-amber-300 font-mono text-[11px] hover:border-amber-400/50 cursor-pointer"
-            >
-              ic_launcher_foreground.xml
+              CustomModelScreen.kt
             </button>
             <button
               onClick={() =>
                 onInspectSourceFile(
-                  'core-tools/src/main/java/ai/mangal/core/tools/AndroidToolExecutor.kt'
+                  'app/src/main/java/ai/mangal/assistant/speech/MangalSpeechListener.kt'
+                )
+              }
+              className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-amber-300 font-mono text-[11px] hover:border-amber-400/50 cursor-pointer"
+            >
+              MangalSpeechListener.kt
+            </button>
+            <button
+              onClick={() =>
+                onInspectSourceFile(
+                  'app/src/main/java/ai/mangal/assistant/ui/models/ModelManagerScreen.kt'
                 )
               }
               className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-emerald-300 font-mono text-[11px] hover:border-emerald-400/50 cursor-pointer"
             >
-              AndroidToolExecutor.kt
+              ModelManagerScreen.kt
             </button>
           </div>
         </div>

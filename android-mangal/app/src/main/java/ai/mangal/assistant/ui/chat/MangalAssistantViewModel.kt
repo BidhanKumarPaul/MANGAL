@@ -2,10 +2,10 @@ package ai.mangal.assistant.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import ai.mangal.assistant.speech.MangalSpeechListener
+import ai.mangal.assistant.speech.VoiceListenPhase
 import ai.mangal.core.llm.LlmEngine
-import ai.mangal.core.stt.AudioRecordPcmCapture
 import ai.mangal.core.stt.OpenWakeWordDetector
-import ai.mangal.core.stt.WhisperTranscriber
 import ai.mangal.core.tools.AndroidToolExecutor
 import ai.mangal.core.tools.ToolRegistry
 import ai.mangal.core.tts.LocalTtsSpeaker
@@ -21,17 +21,11 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/**
- * Production MVVM @HiltViewModel coordinating the end-to-end 100% offline loop:
- * Wake Word ("Mangal") / Push-To-Talk -> AudioRecordPcmCapture -> WhisperTranscriber
- * -> LlmEngine -> ToolRegistry & AndroidToolExecutor -> LocalTtsSpeaker -> SQLCipher ChatRepository.
- */
 @HiltViewModel
 class MangalAssistantViewModel @Inject constructor(
     private val chatRepository: ChatRepository,
-    private val pcmCapture: AudioRecordPcmCapture,
+    private val speechListener: MangalSpeechListener,
     private val wakeWordDetector: OpenWakeWordDetector,
-    private val whisperTranscriber: WhisperTranscriber,
     private val llmEngine: LlmEngine,
     private val toolRegistry: ToolRegistry,
     private val toolExecutor: AndroidToolExecutor,
@@ -46,44 +40,47 @@ class MangalAssistantViewModel @Inject constructor(
         chatRepository.observeSessionMessages(DEFAULT_SESSION_ID)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _isRecordingPtt = MutableStateFlow(false)
-    val isRecordingPtt: StateFlow<Boolean> = _isRecordingPtt.asStateFlow()
+    val listenPhase: StateFlow<VoiceListenPhase> = speechListener.phase
+    val livePartialText: StateFlow<String> = speechListener.livePartialText
+    val rmsLevel: StateFlow<Float> = speechListener.rmsLevel
+    val handsFreeEnabled: StateFlow<Boolean> = speechListener.handsFreeEnabled
+    val activeModelName: StateFlow<String> = llmEngine.activeModelDisplayName
 
-    private val _statusLine = MutableStateFlow("Listening for \"Mangal\" wake word · 100% Offline")
+    private val _statusLine = MutableStateFlow("Hands-Free Active · Say \"Mangal\" or Tap Mic")
     val statusLine: StateFlow<String> = _statusLine.asStateFlow()
 
-    fun startPushToTalkCapture() {
-        if (_isRecordingPtt.value) return
-        _isRecordingPtt.value = true
-        _statusLine.value = "Capturing 16kHz PCM audio..."
-        pcmCapture.startCapture(viewModelScope)
-    }
-
-    fun stopPushToTalkAndTranscribe() {
-        if (!_isRecordingPtt.value) return
-        _isRecordingPtt.value = false
-        val pcmSamples = pcmCapture.stopAndDrainPcmBuffer()
-        viewModelScope.launch {
-            _statusLine.value = "Transcribing with whisper.cpp..."
-            val transcript = whisperTranscriber.transcribePcm16kStream(pcmSamples)
-                .firstOrNull()
-                ?.trim()
-                .orEmpty()
-            if (transcript.isNotEmpty()) {
-                submitUserUtterance(transcript)
-            } else {
-                _statusLine.value = "No speech detected. Say \"Mangal\" or tap to speak."
-            }
+    init {
+        speechListener.attachCommandCallback { spokenUtterance, wokeByMangal ->
+            submitUserUtterance(spokenUtterance, triggeredByWakeWord = wokeByMangal)
         }
     }
 
-    fun submitUserUtterance(rawInput: String) {
+    fun onMicPermissionReady() {
+        speechListener.ensureListeningIfAllowed()
+    }
+
+    fun toggleHandsFreeWakeWord(enabled: Boolean) {
+        speechListener.setHandsFreeWakeEnabled(enabled)
+        _statusLine.value = if (enabled) {
+            "Hands-Free Active · Say \"Mangal\" anytime"
+        } else {
+            "Hands-Free Paused · Tap Mic to Speak"
+        }
+    }
+
+    fun triggerTapToSpeak() {
+        _statusLine.value = "Listening now... Speak your command"
+        speechListener.startDirectCommandListening(fromWakeWord = false)
+    }
+
+    fun submitUserUtterance(rawInput: String, triggeredByWakeWord: Boolean = false) {
         val trimmed = rawInput.trim()
         if (trimmed.isEmpty()) return
 
         viewModelScope.launch {
-            val (wokeByPhrase, strippedCommand) = wakeWordDetector.matchWakeTranscript(trimmed)
-            val effectivePrompt = if (wokeByPhrase && strippedCommand.isNotBlank()) {
+            val (matchedPrefix, strippedCommand) = wakeWordDetector.matchWakeTranscript(trimmed)
+            val wokeByPhrase = triggeredByWakeWord || matchedPrefix
+            val effectivePrompt = if (matchedPrefix && strippedCommand.isNotBlank()) {
                 strippedCommand
             } else {
                 trimmed
@@ -96,19 +93,20 @@ class MangalAssistantViewModel @Inject constructor(
             )
 
             // If user only said "Mangal" (like "Hey Google") without a trailing command:
-            if (wokeByPhrase && strippedCommand.isBlank()) {
-                val promptReply = "I'm listening. What can I do for you?"
+            if (matchedPrefix && strippedCommand.isBlank() || trimmed.equals("mangal", ignoreCase = true)) {
+                val promptReply = "Yes? I'm listening. Tell me what to do."
                 chatRepository.appendMessage(
                     sessionId = DEFAULT_SESSION_ID,
                     role = "assistant",
                     content = promptReply
                 )
+                _statusLine.value = "Wake Word \"Mangal\" Triggered · Speak your command now"
                 ttsSpeaker.speakOffline(promptReply)
-                startPushToTalkCapture()
+                speechListener.startDirectCommandListening(fromWakeWord = true)
                 return@launch
             }
 
-            _statusLine.value = "Running on-device LLM inference..."
+            _statusLine.value = "Executing offline action..."
             val systemPrompt = toolRegistry.buildSystemPrompt()
             val rawModelJson = llmEngine.generateStream(
                 systemPrompt = systemPrompt,
@@ -128,7 +126,11 @@ class MangalAssistantViewModel @Inject constructor(
                     toolName = execResult.toolName,
                     toolPayloadJson = rawModelJson
                 )
-                _statusLine.value = "Listening for \"Mangal\" wake word · 100% Offline"
+                _statusLine.value = if (wokeByPhrase) {
+                    "Executed via \"Mangal\" Wake · Listening again"
+                } else {
+                    "Action Complete · Say \"Mangal\" or Tap Mic"
+                }
                 ttsSpeaker.speakOffline(execResult.humanReadableSummary)
             } else {
                 val replyText = envelope?.replyText ?: rawModelJson
@@ -136,9 +138,9 @@ class MangalAssistantViewModel @Inject constructor(
                     sessionId = DEFAULT_SESSION_ID,
                     role = "assistant",
                     content = replyText,
-                    toolPayloadJson = rawModelJson
+                    toolPayloadJson = null
                 )
-                _statusLine.value = "Listening for \"Mangal\" wake word · 100% Offline"
+                _statusLine.value = "Hands-Free Active · Say \"Mangal\" or Tap Mic"
                 ttsSpeaker.speakOffline(replyText)
             }
         }

@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Play Protect Hardening: Disallow all cleartext HTTP traffic -->
+    <!-- Play Protect Hardening: Disallow all cleartext HTTP traffic while permitting
+         HTTPS redirects to Hugging Face LFS CDNs (cdn-lfs.hf.co, cas-bridge.xethub.hf.co)
+         and user-specified custom HTTPS GGUF model URLs. -->
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
-    <!-- Allow HTTPS strictly for user-initiated open-weights downloads from Hugging Face -->
-    <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">huggingface.co</domain>
-    </domain-config>
 </network-security-config>

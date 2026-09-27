@@ -2,16 +2,14 @@ package ai.mangal.assistant
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import ai.mangal.assistant.lifecycle.ModelMemoryLifecycleObserver
 import ai.mangal.assistant.navigation.MangalNavHost
+import ai.mangal.assistant.ui.theme.MangalTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
-
-private val MangalDarkPalette = darkColorScheme()
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -22,16 +20,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         lifecycle.addObserver(modelMemoryLifecycleObserver)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.parseColor("#0B0F17")),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.parseColor("#090D14"))
+        )
         setContent {
-            MaterialTheme(colorScheme = MangalDarkPalette) {
+            MangalTheme {
                 MangalNavHost()
             }
         }
-    }
-
-    override fun onDestroy() {
-        lifecycle.removeObserver(modelMemoryLifecycleObserver)
-        super.onDestroy()
     }
 }

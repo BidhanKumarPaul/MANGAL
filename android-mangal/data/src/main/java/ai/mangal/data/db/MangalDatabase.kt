@@ -25,7 +25,7 @@ data class ChatMessageEntity(
 data class LocalModelEntity(
     @PrimaryKey val modelId: String,
     val displayName: String,
-    val category: String, // "LLM_GGUF" | "STT_WHISPER"
+    val category: String, // "LLM_GGUF" | "STT_WHISPER" | "CUSTOM_GGUF"
     val quantization: String,
     val fileSizeBytes: Long,
     val requiredRamMb: Int,
@@ -54,11 +54,20 @@ interface ChatDao {
 
 @Dao
 interface ModelDao {
-    @Query("SELECT * FROM local_models ORDER BY category ASC, requiredRamMb ASC")
+    @Query("SELECT * FROM local_models ORDER BY isActive DESC, category ASC, requiredRamMb ASC")
     fun observeAllModels(): Flow<List<LocalModelEntity>>
+
+    @Query("SELECT COUNT(*) FROM local_models")
+    suspend fun countModels(): Int
+
+    @Query("UPDATE local_models SET isActive = 0 WHERE category = :category")
+    suspend fun deactivateCategory(category: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertModel(model: LocalModelEntity)
+
+    @Query("DELETE FROM local_models WHERE modelId = :modelId")
+    suspend fun deleteModelById(modelId: String)
 }
 
 @Dao

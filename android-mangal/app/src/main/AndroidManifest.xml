@@ -2,35 +2,44 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Audio capture for on-device whisper.cpp & hands-free "Mangal" wake word -->
+    <!-- Audio capture for hands-free "Mangal" wake word, SpeechRecognizer & whisper.cpp -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Foreground Service (Microphone) for hands-free "Mangal" wake word detection -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Initial Wi-Fi model download ONLY; unused during 100% offline runtime inference -->
+    <!-- Strictly for downloading GGUF / Whisper models in Model Manager; zero runtime calls -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!--
-      PLAY PROTECT COMPLIANCE NOTE:
-      We intentionally omit restricted SEND_SMS, CALL_PHONE, and SCHEDULE_EXACT_ALARM
-      permissions that trigger Google Play Protect "Harmful App / Toll Fraud" warnings on
-      non-default handlers. Instead, SMS, calls, and alarms use verified system intents
-      (ACTION_SENDTO smsto:, ACTION_DIAL tel:, and SET_ALARM) or optional CalendarContract.
-    -->
+    <!-- Supported v1 Local Action Permissions -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
-    <!-- Hardware feature declarations (non-blocking for Wi-Fi tablets without telephony/flash) -->
-    <uses-feature android:name="android.hardware.telephony" android:required="false" />
-    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
-    <uses-feature android:name="android.hardware.microphone" android:required="true" />
+    <!-- NOTE FOR GOOGLE PLAY PROTECT COMPLIANCE:
+         SEND_SMS and CALL_PHONE are intentionally omitted because Play Protect flags
+         sideloaded/non-default apps requesting direct SMS/Call permissions alongside INTERNET.
+         MANGAL executes SMS and Calls via system-mediated ACTION_SENDTO / ACTION_DIAL intents. -->
 
-    <!-- Package visibility for opening apps, alarms, SMS/Dialer, and search on Android 11+ (API 30+) -->
+    <uses-feature
+        android:name="android.hardware.camera.flash"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="true" />
+
+    <!-- Android 11–15 (API 30–35) package visibility queries -->
     <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -42,6 +51,9 @@
             <action android:name="android.intent.action.SET_TIMER" />
         </intent>
         <intent>
+            <action android:name="android.intent.action.WEB_SEARCH" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.SENDTO" />
             <data android:scheme="smsto" />
         </intent>
@@ -50,22 +62,21 @@
             <data android:scheme="tel" />
         </intent>
         <intent>
-            <action android:name="android.intent.action.WEB_SEARCH" />
+            <action android:name="android.speech.tts.TextToSpeech.Engine.ACTION_CHECK_TTS_DATA" />
         </intent>
     </queries>
 
     <application
         android:name=".MangalApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:allowBackup="false"
-        android:fullBackupContent="false"
-        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:label="@string/app_name"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:usesCleartextTraffic="false"
-        android:label="MANGAL"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:usesCleartextTraffic="false"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
         tools:targetApi="35">
 
         <activity
@@ -75,16 +86,20 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-                <!-- Supports Android Digital Assistant long-press home gesture -->
+            </intent-filter>
+            <!-- Voice Assistant role intent so user can also bind long-press assist button -->
+            <intent-filter>
                 <action android:name="android.intent.action.ASSIST" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 
-        <!-- Hands-Free "Mangal" Wake Word Service with explicit microphone foregroundServiceType -->
+        <!-- Play-Protect-Compliant Hands-Free Wake Word Service ("Mangal") -->
         <service
             android:name=".service.MangalWakeWordForegroundService"
+            android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="microphone" />
     </application>
+
 </manifest>
