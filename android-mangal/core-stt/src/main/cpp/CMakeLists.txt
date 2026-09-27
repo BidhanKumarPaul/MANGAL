@@ -3,6 +3,7 @@ project("mangal_whisper_jni" LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if(${ANDROID_ABI} STREQUAL "arm64-v8a")
     add_compile_options(-march=armv8.2-a+dotprod+fp16 -O3)
@@ -17,8 +18,12 @@ add_library(mangal_whisper_jni SHARED
 
 find_library(log-lib log)
 
-# Link upstream ggml-org/whisper.cpp when git submodule is initialized
+# Link upstream ggml-org/whisper.cpp statically when git submodule is initialized
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/whisper.cpp/CMakeLists.txt")
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+    set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+    set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
     set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     add_subdirectory(whisper.cpp build-whisper EXCLUDE_FROM_ALL)
@@ -29,6 +34,5 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/whisper.cpp/CMakeLists.txt")
     )
     target_link_libraries(mangal_whisper_jni whisper ${log-lib})
 else()
-    message(WARNING "whisper.cpp submodule not found at core-stt/src/main/cpp/whisper.cpp. Building JNI fallback bridge.")
     target_link_libraries(mangal_whisper_jni ${log-lib})
 endif()

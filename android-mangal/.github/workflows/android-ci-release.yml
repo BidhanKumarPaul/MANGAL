@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       compile_upstream_cpp:
-        description: 'Clone & compile upstream llama.cpp and whisper.cpp C/C++ engines via NDK'
+        description: 'Clone & compile upstream llama.cpp and whisper.cpp submodules via NDK'
         required: false
-        default: true
+        default: false
         type: boolean
 
 permissions:
@@ -56,8 +56,8 @@ jobs:
             exit 1
           fi
 
-      - name: Fetch Upstream llama.cpp & whisper.cpp (MIT) for NDK Compilation
-        if: ${{ github.event.inputs.compile_upstream_cpp != 'false' }}
+      - name: Optional — Fetch Upstream llama.cpp & whisper.cpp (When Requested)
+        if: ${{ github.event.inputs.compile_upstream_cpp == 'true' }}
         run: |
           LLAMA_DIR="${ANDROID_ROOT}/core-llm/src/main/cpp/llama.cpp"
           WHISPER_DIR="${ANDROID_ROOT}/core-stt/src/main/cpp/whisper.cpp"
@@ -80,17 +80,30 @@ jobs:
           distribution: 'temurin'
           java-version: ${{ env.JAVA_VERSION }}
 
-      - name: Set up Android SDK, NDK r27 & CMake 3.22.1
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK Platform 35, Build-Tools & NDK r27
+      - name: Install Android SDK Platform 35, Build-Tools & NDK r27 (Direct cmdline-tools 16.0+)
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager \
+          # NOTE: Do NOT use android-actions/setup-android@v3 because it invokes
+          # 'sdkmanager tools', which fails on cmdline-tools 16.0+ where 'tools' is obsolete.
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="${ANDROID_HOME}"
+          echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_HOME}" >> "$GITHUB_ENV"
+
+          SDKMANAGER=$(find "${ANDROID_HOME}/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n 1)
+          if [ -z "${SDKMANAGER}" ]; then
+            echo "::error::sdkmanager binary not found under ${ANDROID_HOME}/cmdline-tools"
+            exit 1
+          fi
+          echo "Using sdkmanager: ${SDKMANAGER}"
+
+          yes | "${SDKMANAGER}" --licenses > /dev/null || true
+          "${SDKMANAGER}" --install \
             "platforms;android-${COMPILE_SDK}" \
             "build-tools;${BUILD_TOOLS_VERSION}" \
             "ndk;${NDK_VERSION}" \
             "cmake;${CMAKE_VERSION}"
+
+          echo "sdk.dir=${ANDROID_HOME}" > "${ANDROID_ROOT}/local.properties"
 
       - name: Set up Gradle ${{ env.GRADLE_VERSION }} (Zero Binary Wrapper Blob Needed)
         uses: gradle/actions/setup-gradle@v4
