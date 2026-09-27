@@ -1,6 +1,9 @@
 package ai.mangal.assistant.ui.chat
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -18,8 +21,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -27,39 +31,53 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.hilt.navigation.compose.hiltViewModel
 import ai.mangal.assistant.permissions.MangalPermissionGroup
 import ai.mangal.assistant.permissions.PermissionGatekeeper
 import ai.mangal.assistant.service.MangalWakeWordForegroundService
 import ai.mangal.assistant.ui.components.MangalBrandLogo
 
-data class UiChatTurn(
-    val role: String,
-    val content: String,
-    val toolBadge: String? = null
-)
-
 @Composable
-fun VoiceChatScreen() {
+fun VoiceChatScreen(
+    viewModel: MangalAssistantViewModel = hiltViewModel()
+) {
     val context = LocalContext.current
+    val messages by viewModel.messages.collectAsState()
+    val isRecordingPtt by viewModel.isRecordingPtt.collectAsState()
+    val statusLine by viewModel.statusLine.collectAsState()
+
     var micGranted by remember {
         mutableStateOf(PermissionGatekeeper.isGroupGranted(context, MangalPermissionGroup.MICROPHONE))
     }
     var wakeWordActive by remember { mutableStateOf(true) }
     var textDraft by remember { mutableStateOf("") }
 
-    val messages = remember {
-        mutableStateListOf(
-            UiChatTurn(
-                role = "assistant",
-                content = "MANGAL ready (100% offline, Play Protect verified). Say \"Mangal\" anytime to wake hands-free, or hold Push-to-Talk."
-            )
-        )
-    }
-
     val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         micGranted = result.values.all { it }
+    }
+
+    // Listen for ACTION_WAKE_WORD_DETECTED broadcast from MangalWakeWordForegroundService
+    DisposableEffect(context, micGranted) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                if (intent?.action == MangalWakeWordForegroundService.ACTION_WAKE_WORD_DETECTED) {
+                    viewModel.startPushToTalkCapture()
+                }
+            }
+        }
+        val filter = IntentFilter(MangalWakeWordForegroundService.ACTION_WAKE_WORD_DETECTED)
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        onDispose {
+            context.unregisterReceiver(receiver)
+        }
     }
 
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -78,23 +96,22 @@ fun VoiceChatScreen() {
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    MangalBrandLogo(size = 44.dp, isPulsingWake = wakeWordActive && micGranted)
+                    MangalBrandLogo(
+                        size = 44.dp,
+                        isPulsingWake = (wakeWordActive && micGranted) || isRecordingPtt
+                    )
                     Column {
                         Text(
                             text = "MANGAL · Hands-Free Voice AI",
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = if (wakeWordActive && micGranted) {
-                                "Listening for \"Mangal\" wake word · 100% Offline"
-                            } else {
-                                "Qwen 2.5 1.5B Q4_K_M · Whisper Tiny INT8"
-                            },
+                            text = statusLine,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
                 }
-                OutlinedButton(onClick = { messages.clear() }) {
+                OutlinedButton(onClick = { viewModel.clearEncryptedHistory() }) {
                     Text("Clear")
                 }
             }
@@ -106,15 +123,15 @@ fun VoiceChatScreen() {
                     .padding(vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(messages) { msg ->
+                items(messages, key = { it.id }) { msg ->
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = if (msg.role == "user") "YOU" else "MANGAL",
                             style = MaterialTheme.typography.labelSmall
                         )
-                        if (msg.toolBadge != null) {
+                        if (!msg.toolPayloadJson.isNullOrBlank()) {
                             Text(
-                                text = "Tool Executed: ${msg.toolBadge}",
+                                text = "Tool Schema JSON: ${msg.toolPayloadJson}",
                                 style = MaterialTheme.typography.labelMedium
                             )
                         }
@@ -156,14 +173,7 @@ fun VoiceChatScreen() {
                             if (textDraft.isNotBlank()) {
                                 val input = textDraft
                                 textDraft = ""
-                                messages.add(UiChatTurn("user", input))
-                                messages.add(
-                                    UiChatTurn(
-                                        role = "assistant",
-                                        content = "Processed offline via ToolRegistry & llama.cpp.",
-                                        toolBadge = "ToolRegistry"
-                                    )
-                                )
+                                viewModel.submitUserUtterance(input)
                             }
                         }
                     ) {
@@ -176,11 +186,23 @@ fun VoiceChatScreen() {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { /* Push-to-Talk AudioRecord -> WhisperTranscriber */ },
+                        onClick = {
+                            if (isRecordingPtt) {
+                                viewModel.stopPushToTalkAndTranscribe()
+                            } else {
+                                viewModel.startPushToTalkCapture()
+                            }
+                        },
                         enabled = micGranted,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Hold to Speak (Whisper STT)")
+                        Text(
+                            if (isRecordingPtt) {
+                                "Stop & Transcribe (whisper.cpp)"
+                            } else {
+                                "Tap to Speak (Whisper STT)"
+                            }
+                        )
                     }
                     OutlinedButton(
                         onClick = {
@@ -192,7 +214,11 @@ fun VoiceChatScreen() {
                                     MangalWakeWordForegroundService.ACTION_STOP_WAKE_LISTENING
                                 }
                             }
-                            context.startService(serviceIntent)
+                            if (wakeWordActive) {
+                                ContextCompat.startForegroundService(context, serviceIntent)
+                            } else {
+                                context.startService(serviceIntent)
+                            }
                         },
                         enabled = micGranted
                     ) {

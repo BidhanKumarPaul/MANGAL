@@ -15,6 +15,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,12 +23,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import ai.mangal.data.models.RecommendedModelCatalog
+import androidx.hilt.navigation.compose.hiltViewModel
 
 @Composable
-fun ModelManagerScreen() {
+fun ModelManagerScreen(
+    viewModel: ModelManagerViewModel = hiltViewModel()
+) {
     var wifiOnlyGuard by remember { mutableStateOf(true) }
-    val models = remember { RecommendedModelCatalog.ALL_MODELS }
+    val models by viewModel.models.collectAsState()
+    val statusBanner by viewModel.statusBanner.collectAsState()
 
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -45,6 +49,14 @@ fun ModelManagerScreen() {
                 style = MaterialTheme.typography.bodySmall
             )
 
+            statusBanner?.let { msg ->
+                Text(
+                    text = msg,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -61,7 +73,7 @@ fun ModelManagerScreen() {
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(models) { model ->
+                items(models, key = { it.modelId }) { model ->
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -87,10 +99,18 @@ fun ModelManagerScreen() {
                             style = MaterialTheme.typography.bodySmall
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { /* Invokes ResumableModelDownloader.downloadModelWithResume */ }) {
+                            Button(
+                                onClick = {
+                                    viewModel.downloadOrActivate(model, wifiOnlyGuard)
+                                }
+                            ) {
                                 Text(if (model.isActive) "Active Model" else "Download / Activate")
                             }
-                            OutlinedButton(onClick = { /* Invokes ResumableModelDownloader.deleteModelFile */ }) {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.deleteModel(model)
+                                }
+                            ) {
                                 Text("Delete")
                             }
                         }

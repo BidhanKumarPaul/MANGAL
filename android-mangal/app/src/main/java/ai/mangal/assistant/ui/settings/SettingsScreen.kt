@@ -15,25 +15,26 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import ai.mangal.assistant.permissions.MangalPermissionGroup
 import ai.mangal.assistant.permissions.PermissionGatekeeper
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(
+    viewModel: SettingsViewModel = hiltViewModel()
+) {
     val context = LocalContext.current
-    var speechRate by remember { mutableFloatStateOf(1.0f) }
-    var pitch by remember { mutableFloatStateOf(1.0f) }
-    var unloadWhenBackgrounded by remember { mutableStateOf(true) }
+    val speechRate by viewModel.speechRate.collectAsState()
+    val pitch by viewModel.pitch.collectAsState()
+    val unloadWhenBackgrounded by viewModel.unloadWhenBackgrounded.collectAsState()
 
     val grantStates = remember {
         mutableStateMapOf<MangalPermissionGroup, Boolean>().apply {
@@ -75,7 +76,7 @@ fun SettingsScreen() {
                 )
                 Slider(
                     value = speechRate,
-                    onValueChange = { speechRate = it },
+                    onValueChange = { viewModel.updateSpeechRate(it) },
                     valueRange = 0.5f..2.0f
                 )
             }
@@ -87,7 +88,7 @@ fun SettingsScreen() {
                 )
                 Slider(
                     value = pitch,
-                    onValueChange = { pitch = it },
+                    onValueChange = { viewModel.updatePitch(it) },
                     valueRange = 0.5f..1.5f
                 )
             }
@@ -104,7 +105,7 @@ fun SettingsScreen() {
                 )
                 Switch(
                     checked = unloadWhenBackgrounded,
-                    onCheckedChange = { unloadWhenBackgrounded = it }
+                    onCheckedChange = { viewModel.setUnloadWhenBackgrounded(it) }
                 )
             }
 

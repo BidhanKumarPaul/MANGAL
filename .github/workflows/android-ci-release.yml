@@ -1,0 +1,199 @@
+name: MANGAL Android CI/CD (NDK C++ JNI + Signed APK & Play Store AAB)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      compile_upstream_cpp:
+        description: 'Clone & compile upstream llama.cpp and whisper.cpp C/C++ engines via NDK'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  JAVA_VERSION: '17'
+  GRADLE_VERSION: '8.9'
+  COMPILE_SDK: '35'
+  BUILD_TOOLS_VERSION: '35.0.0'
+  NDK_VERSION: '27.0.12077973'
+  CMAKE_VERSION: '3.22.1'
+
+jobs:
+  build-android-release:
+    name: Build Debug APK, Signed Release APK & Play Store AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Detect Android Project Root (Monorepo vs Standalone)
+        id: detect-root
+        run: |
+          if [ -f "android-mangal/settings.gradle.kts" ]; then
+            echo "ANDROID_ROOT=android-mangal" >> "$GITHUB_ENV"
+            echo "Detected monorepo layout: ANDROID_ROOT=android-mangal"
+          elif [ -f "settings.gradle.kts" ]; then
+            echo "ANDROID_ROOT=." >> "$GITHUB_ENV"
+            echo "Detected standalone Android root: ANDROID_ROOT=."
+          else
+            echo "::error::Could not find settings.gradle.kts in '.' or 'android-mangal/'"
+            exit 1
+          fi
+
+      - name: Fetch Upstream llama.cpp & whisper.cpp (MIT) for NDK Compilation
+        if: ${{ github.event.inputs.compile_upstream_cpp != 'false' }}
+        run: |
+          LLAMA_DIR="${ANDROID_ROOT}/core-llm/src/main/cpp/llama.cpp"
+          WHISPER_DIR="${ANDROID_ROOT}/core-stt/src/main/cpp/whisper.cpp"
+
+          if [ ! -f "${LLAMA_DIR}/CMakeLists.txt" ]; then
+            echo "Cloning upstream ggml-org/llama.cpp..."
+            rm -rf "${LLAMA_DIR}"
+            git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "${LLAMA_DIR}"
+          fi
+
+          if [ ! -f "${WHISPER_DIR}/CMakeLists.txt" ]; then
+            echo "Cloning upstream ggml-org/whisper.cpp..."
+            rm -rf "${WHISPER_DIR}"
+            git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git "${WHISPER_DIR}"
+          fi
+
+      - name: Set up JDK 17 (Eclipse Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Android SDK, NDK r27 & CMake 3.22.1
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Platform 35, Build-Tools & NDK r27
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager \
+            "platforms;android-${COMPILE_SDK}" \
+            "build-tools;${BUILD_TOOLS_VERSION}" \
+            "ndk;${NDK_VERSION}" \
+            "cmake;${CMAKE_VERSION}"
+
+      - name: Set up Gradle ${{ env.GRADLE_VERSION }} (Zero Binary Wrapper Blob Needed)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          cache-read-only: false
+
+      - name: Configure Upload Keystore (GitHub Secrets or Ephemeral 4096-bit RSA Key)
+        env:
+          SECRET_KEYSTORE_B64: ${{ secrets.MANGAL_KEYSTORE_BASE64 }}
+          SECRET_STORE_PASS: ${{ secrets.MANGAL_KEYSTORE_PASSWORD }}
+          SECRET_KEY_ALIAS: ${{ secrets.MANGAL_KEY_ALIAS }}
+          SECRET_KEY_PASS: ${{ secrets.MANGAL_KEY_PASSWORD }}
+        run: |
+          KEYSTORE_PATH="${RUNNER_TEMP}/mangal-upload-key.jks"
+
+          if [ -n "${SECRET_KEYSTORE_B64}" ] && [ -n "${SECRET_STORE_PASS}" ] && [ -n "${SECRET_KEY_ALIAS}" ]; then
+            echo "Using production upload keystore from GitHub Actions Secrets..."
+            echo "${SECRET_KEYSTORE_B64}" | base64 --decode > "${KEYSTORE_PATH}"
+            STORE_PASS="${SECRET_STORE_PASS}"
+            KEY_ALIAS="${SECRET_KEY_ALIAS}"
+            KEY_PASS="${SECRET_KEY_PASS:-$SECRET_STORE_PASS}"
+          else
+            echo "::notice::MANGAL_KEYSTORE_BASE64 secret not set. Generating 4096-bit RSA release keystore so signed APK & AAB build out-of-the-box."
+            STORE_PASS="mangal_release_ci_pass_2026"
+            KEY_ALIAS="mangal_upload"
+            KEY_PASS="mangal_release_ci_pass_2026"
+            keytool -genkeypair -v \
+              -keystore "${KEYSTORE_PATH}" \
+              -keyalg RSA \
+              -keysize 4096 \
+              -validity 10000 \
+              -alias "${KEY_ALIAS}" \
+              -storepass "${STORE_PASS}" \
+              -keypass "${KEY_PASS}" \
+              -dname "CN=MANGAL Offline AI, OU=Mobile AI Systems, O=MangalAI, L=Bengaluru, ST=KA, C=IN"
+          fi
+
+          cat > "${ANDROID_ROOT}/keystore.properties" <<EOF
+          storeFile=${KEYSTORE_PATH}
+          storePassword=${STORE_PASS}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PASS}
+          EOF
+
+      - name: Build Debug APK, Signed Release APK & Play Store Release AAB
+        run: |
+          gradle -p "${ANDROID_ROOT}" \
+            assembleDebug \
+            assembleRelease \
+            bundleRelease \
+            --no-daemon \
+            --stacktrace
+
+      - name: Verify APK Signature Schemes (v1/v2/v3/v4) & Play Protect Compliance
+        run: |
+          APKSIGNER="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner"
+          RELEASE_APK=$(find "${ANDROID_ROOT}/app/build/outputs/apk/release" -name "*-release*.apk" | head -n 1)
+
+          if [ -z "${RELEASE_APK}" ]; then
+            echo "::error::Signed Release APK not found!"
+            exit 1
+          fi
+
+          echo "Verifying cryptographic signatures on ${RELEASE_APK}..."
+          "${APKSIGNER}" verify --verbose --print-certs "${RELEASE_APK}"
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mangal-debug-apk
+          path: ${{ env.ANDROID_ROOT }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload Play-Protect-Safe Signed Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mangal-signed-release-apk
+          path: |
+            ${{ env.ANDROID_ROOT }}/app/build/outputs/apk/release/*.apk
+            ${{ env.ANDROID_ROOT }}/app/build/outputs/apk/release/*.idsig
+          if-no-files-found: error
+
+      - name: Upload Google Play Console Release Bundle (.aab) Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mangal-play-store-release-aab
+          path: ${{ env.ANDROID_ROOT }}/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+
+      - name: Upload R8 / ProGuard Obfuscation Mapping (Play Console Crash Deobfuscation)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mangal-r8-mapping
+          path: ${{ env.ANDROID_ROOT }}/app/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: warn
+
+      - name: Publish GitHub Release (On Tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            ${{ env.ANDROID_ROOT }}/app/build/outputs/apk/release/*.apk
+            ${{ env.ANDROID_ROOT }}/app/build/outputs/bundle/release/*.aab
+            ${{ env.ANDROID_ROOT }}/app/build/outputs/mapping/release/mapping.txt

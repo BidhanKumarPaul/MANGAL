@@ -1157,7 +1157,15 @@ export default function App() {
                     hands-free wake word service, and Play Protect compliance.
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() =>
+                      openFileInExplorer('.github/workflows/android-ci-release.yml')
+                    }
+                    className="px-3 py-2 text-xs font-semibold text-slate-950 bg-amber-400 rounded-lg hover:bg-amber-300 cursor-pointer"
+                  >
+                    View GitHub Actions Workflow (.yml)
+                  </button>
                   <button
                     onClick={() =>
                       openFileInExplorer('app/src/main/res/drawable/ic_launcher_foreground.xml')
