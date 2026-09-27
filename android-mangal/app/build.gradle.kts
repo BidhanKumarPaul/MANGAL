@@ -1,3 +1,4 @@
+import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
 
@@ -38,16 +39,19 @@ android {
 
     signingConfigs {
         create("release") {
-            val ksFile = keystoreProperties.getProperty("storeFile")
-                ?: System.getenv("MANGAL_KEYSTORE_FILE")
-            if (!ksFile.isNullOrBlank()) {
-                storeFile = file(ksFile)
-                storePassword = keystoreProperties.getProperty("storePassword")
-                    ?: System.getenv("MANGAL_KEYSTORE_PASSWORD")
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                    ?: System.getenv("MANGAL_KEY_ALIAS")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
-                    ?: System.getenv("MANGAL_KEY_PASSWORD")
+            val ksPath = keystoreProperties.getProperty("storeFile")?.trim()
+                ?: System.getenv("MANGAL_KEYSTORE_FILE")?.trim()
+            if (!ksPath.isNullOrBlank()) {
+                val resolvedKeystore = File(ksPath).let {
+                    if (it.isAbsolute) it else rootProject.file(ksPath)
+                }
+                storeFile = resolvedKeystore
+                storePassword = keystoreProperties.getProperty("storePassword")?.trim()
+                    ?: System.getenv("MANGAL_KEYSTORE_PASSWORD")?.trim()
+                keyAlias = keystoreProperties.getProperty("keyAlias")?.trim()
+                    ?: System.getenv("MANGAL_KEY_ALIAS")?.trim()
+                keyPassword = keystoreProperties.getProperty("keyPassword")?.trim()
+                    ?: System.getenv("MANGAL_KEY_PASSWORD")?.trim()
             }
             // Enable APK Signature Schemes v1, v2, v3, and v4 so Google Play Protect
             // cryptographic integrity verification passes without warnings.
@@ -83,6 +87,11 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    lint {
+        // Prevents Kotlin 2.0.21 KaSessionProvider analysis API warnings during release builds
+        checkReleaseBuilds = false
+        abortOnError = false
     }
     packaging {
         jniLibs {

@@ -1,1 +1,7 @@
 -keep class net.zetetic.database.sqlcipher.** { *; }
+-keep interface net.zetetic.database.sqlcipher.** { *; }
+-keep class com.google.crypto.tink.** { *; }
+-dontwarn com.google.crypto.tink.**
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.annotation.**
+-dontwarn org.conscrypt.**

@@ -23,7 +23,16 @@
 -keep class net.zetetic.database.sqlcipher.** { *; }
 -keep interface net.zetetic.database.sqlcipher.** { *; }
 
-# 4. Preserve Kotlinx Serialization @Serializable tool schemas (:core-tools)
+# 4. Google Tink & AndroidX Security Crypto (fixes R8 missing errorprone annotations)
+-keep class com.google.crypto.tink.** { *; }
+-dontwarn com.google.crypto.tink.**
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.annotation.**
+-dontwarn org.conscrypt.**
+-dontwarn kotlinx.coroutines.debug.**
+-dontwarn sun.misc.Unsafe
+
+# 5. Preserve Kotlinx Serialization @Serializable tool schemas (:core-tools)
 -keepattributes *Annotation*, InnerClasses, EnclosingMethod, Signature
 -keepclassmembers class ai.mangal.core.tools.** {
     *;

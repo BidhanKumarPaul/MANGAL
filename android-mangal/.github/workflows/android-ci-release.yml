@@ -82,8 +82,6 @@ jobs:
 
       - name: Install Android SDK Platform 35, Build-Tools & NDK r27 (Direct cmdline-tools 16.0+)
         run: |
-          # NOTE: Do NOT use android-actions/setup-android@v3 because it invokes
-          # 'sdkmanager tools', which fails on cmdline-tools 16.0+ where 'tools' is obsolete.
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           export ANDROID_SDK_ROOT="${ANDROID_HOME}"
           echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
@@ -119,6 +117,7 @@ jobs:
           SECRET_KEY_PASS: ${{ secrets.MANGAL_KEY_PASSWORD }}
         run: |
           KEYSTORE_PATH="${RUNNER_TEMP}/mangal-upload-key.jks"
+          rm -f "${KEYSTORE_PATH}"
 
           if [ -n "${SECRET_KEYSTORE_B64}" ] && [ -n "${SECRET_STORE_PASS}" ] && [ -n "${SECRET_KEY_ALIAS}" ]; then
             echo "Using production upload keystore from GitHub Actions Secrets..."
@@ -142,12 +141,9 @@ jobs:
               -dname "CN=MANGAL Offline AI, OU=Mobile AI Systems, O=MangalAI, L=Bengaluru, ST=KA, C=IN"
           fi
 
-          cat > "${ANDROID_ROOT}/keystore.properties" <<EOF
-          storeFile=${KEYSTORE_PATH}
-          storePassword=${STORE_PASS}
-          keyAlias=${KEY_ALIAS}
-          keyPassword=${KEY_PASS}
-          EOF
+          printf "storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n" \
+            "${KEYSTORE_PATH}" "${STORE_PASS}" "${KEY_ALIAS}" "${KEY_PASS}" \
+            > "${ANDROID_ROOT}/keystore.properties"
 
       - name: Build Debug APK, Signed Release APK & Play Store Release AAB
         run: |
