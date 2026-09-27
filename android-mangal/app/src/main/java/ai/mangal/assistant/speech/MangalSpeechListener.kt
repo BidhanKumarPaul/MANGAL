@@ -44,7 +44,7 @@ class MangalSpeechListener @Inject constructor(
     private val _livePartialText = MutableStateFlow("")
     val livePartialText: StateFlow<String> = _livePartialText.asStateFlow()
 
-    private val _rmsLevel = MutableStateFlow(0f)
+    private val _rmsLevel = MutableStateFlow(0.04f)
     val rmsLevel: StateFlow<Float> = _rmsLevel.asStateFlow()
 
     private val _handsFreeEnabled = MutableStateFlow(true)
@@ -60,6 +60,7 @@ class MangalSpeechListener @Inject constructor(
     fun setHandsFreeWakeEnabled(enabled: Boolean) {
         _handsFreeEnabled.value = enabled
         mainHandler.post {
+            mainHandler.removeCallbacksAndMessages(null)
             if (enabled) {
                 _phase.value = VoiceListenPhase.STANDBY_LISTENING_FOR_MANGAL
                 startRecognizerSessionInternal()
@@ -76,6 +77,7 @@ class MangalSpeechListener @Inject constructor(
      */
     fun startDirectCommandListening(fromWakeWord: Boolean = false) {
         mainHandler.post {
+            mainHandler.removeCallbacksAndMessages(null)
             playWakeEarcon()
             _phase.value = if (fromWakeWord) {
                 VoiceListenPhase.WAKE_TRIGGERED_AWAITING_COMMAND
@@ -102,12 +104,12 @@ class MangalSpeechListener @Inject constructor(
         stopInternal()
         mainHandler.postDelayed({
             startRecognizerSessionInternal()
-        }, 120L)
+        }, 140L)
     }
 
     private fun startRecognizerSessionInternal() {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            _livePartialText.value = "Speech Recognition service unavailable on this device"
+            _livePartialText.value = "Voice recognition unavailable — use text box or quick chips"
             return
         }
 
@@ -115,6 +117,11 @@ class MangalSpeechListener @Inject constructor(
             if (speechRecognizer == null) {
                 speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
                     setRecognitionListener(createRecognitionListener())
+                }
+            } else {
+                try {
+                    speechRecognizer?.cancel()
+                } catch (_: Exception) {
                 }
             }
 
@@ -127,12 +134,18 @@ class MangalSpeechListener @Inject constructor(
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1600L)
+                putExtra(
+                    RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                    1300L
+                )
             }
 
             isRecognizerBusy = true
             speechRecognizer?.startListening(recognizerIntent)
         } catch (_: Exception) {
             isRecognizerBusy = false
+            scheduleContinuousRestartIfHandsFree(delayMs = 800L)
         }
     }
 
@@ -147,7 +160,7 @@ class MangalSpeechListener @Inject constructor(
             }
 
             override fun onRmsChanged(rmsdB: Float) {
-                val normalized = ((rmsdB + 2f) / 12f).coerceIn(0.03f, 1.0f)
+                val normalized = ((rmsdB + 2f) / 12f).coerceIn(0.04f, 1.0f)
                 _rmsLevel.value = normalized
             }
 
@@ -155,12 +168,20 @@ class MangalSpeechListener @Inject constructor(
 
             override fun onEndOfSpeech() {
                 isRecognizerBusy = false
-                _rmsLevel.value = 0.03f
+                _rmsLevel.value = 0.04f
             }
 
             override fun onError(error: Int) {
                 isRecognizerBusy = false
-                _rmsLevel.value = 0.03f
+                _rmsLevel.value = 0.04f
+
+                if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+                    error == SpeechRecognizer.ERROR_CLIENT ||
+                    error == SpeechRecognizer.ERROR_AUDIO
+                ) {
+                    stopInternal()
+                }
+
                 if (_phase.value == VoiceListenPhase.DIRECT_PTT_LISTENING ||
                     _phase.value == VoiceListenPhase.WAKE_TRIGGERED_AWAITING_COMMAND
                 ) {
@@ -171,12 +192,12 @@ class MangalSpeechListener @Inject constructor(
                         VoiceListenPhase.PAUSED
                     }
                 }
-                scheduleContinuousRestartIfHandsFree()
+                scheduleContinuousRestartIfHandsFree(delayMs = 550L)
             }
 
             override fun onResults(results: Bundle?) {
                 isRecognizerBusy = false
-                _rmsLevel.value = 0.03f
+                _rmsLevel.value = 0.04f
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val topTranscript = matches?.firstOrNull { it.isNotBlank() }?.trim().orEmpty()
                 _livePartialText.value = ""
@@ -184,7 +205,7 @@ class MangalSpeechListener @Inject constructor(
                 if (topTranscript.isNotEmpty()) {
                     handleRecognizedUtterance(topTranscript)
                 } else {
-                    scheduleContinuousRestartIfHandsFree()
+                    scheduleContinuousRestartIfHandsFree(delayMs = 400L)
                 }
             }
 
@@ -197,8 +218,6 @@ class MangalSpeechListener @Inject constructor(
 
                 if (partial.isNotEmpty()) {
                     _livePartialText.value = partial
-                    // If in standby mode and the user says "Mangal" in partial results,
-                    // immediately highlight wake state!
                     if (_phase.value == VoiceListenPhase.STANDBY_LISTENING_FOR_MANGAL &&
                         containsWakeWord(partial)
                     ) {
@@ -225,8 +244,11 @@ class MangalSpeechListener @Inject constructor(
             } else {
                 VoiceListenPhase.PAUSED
             }
-            onCommandRecognizedCallback?.invoke(stripped, currentPhase == VoiceListenPhase.WAKE_TRIGGERED_AWAITING_COMMAND)
-            scheduleContinuousRestartIfHandsFree(delayMs = 1400L)
+            onCommandRecognizedCallback?.invoke(
+                stripped,
+                currentPhase == VoiceListenPhase.WAKE_TRIGGERED_AWAITING_COMMAND
+            )
+            scheduleContinuousRestartIfHandsFree(delayMs = 1500L)
             return
         }
 
@@ -242,22 +264,28 @@ class MangalSpeechListener @Inject constructor(
                 // User only said "Mangal" -> enter active command capture immediately!
                 onCommandRecognizedCallback?.invoke("Mangal", true)
                 _phase.value = VoiceListenPhase.WAKE_TRIGGERED_AWAITING_COMMAND
-                scheduleContinuousRestartIfHandsFree(delayMs = 900L)
+                scheduleContinuousRestartIfHandsFree(delayMs = 950L)
             }
         } else {
-            // Ignored background speech that didn't contain "Mangal"
-            scheduleContinuousRestartIfHandsFree(delayMs = 350L)
+            scheduleContinuousRestartIfHandsFree(delayMs = 400L)
         }
     }
 
     private fun containsWakeWord(text: String): Boolean {
         val lower = text.lowercase(Locale.US)
-        return lower.contains("mangal") || lower.contains("mongol") || lower.contains("mangala") || lower.contains("mangle")
+        return lower.contains("mangal") ||
+            lower.contains("mongol") ||
+            lower.contains("mangala") ||
+            lower.contains("mangle") ||
+            lower.contains("bungalow")
     }
 
     private fun stripWakeWordPrefix(text: String): String {
         return text.replace(
-            Regex("""^(?:hey\s+|ok\s+|hello\s+)?(?:mangal|mongol|mangala|mangle)\b[\s,.:;-]*""", RegexOption.IGNORE_CASE),
+            Regex(
+                """^(?:hey\s+|ok\s+|hello\s+)?(?:mangal|mongol|mangala|mangle|bungalow)\b[\s,.:;-]*""",
+                RegexOption.IGNORE_CASE
+            ),
             ""
         ).trim()
     }
@@ -274,7 +302,13 @@ class MangalSpeechListener @Inject constructor(
     private fun playWakeEarcon() {
         try {
             val toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
-            toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 150)
+            toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 140)
+            mainHandler.postDelayed({
+                try {
+                    toneGen.release()
+                } catch (_: Exception) {
+                }
+            }, 220L)
         } catch (_: Exception) {
         }
     }
@@ -288,6 +322,6 @@ class MangalSpeechListener @Inject constructor(
         }
         speechRecognizer = null
         isRecognizerBusy = false
-        _rmsLevel.value = 0.03f
+        _rmsLevel.value = 0.04f
     }
 }

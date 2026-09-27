@@ -116,9 +116,11 @@ class MangalAssistantViewModel @Inject constructor(
 
             val parsedResult = toolRegistry.parseAndValidateEnvelope(rawModelJson)
             val envelope = parsedResult.getOrNull()
+            val toolName = envelope?.toolName
+            val toolArgs = envelope?.arguments
 
-            if (envelope != null && envelope.type == "tool_call" && envelope.toolName != null && envelope.arguments != null) {
-                val execResult = toolExecutor.execute(envelope.toolName!!, envelope.arguments!!)
+            if (envelope != null && envelope.type == "tool_call" && toolName != null && toolArgs != null) {
+                val execResult = toolExecutor.execute(toolName, toolArgs)
                 chatRepository.appendMessage(
                     sessionId = DEFAULT_SESSION_ID,
                     role = "assistant",

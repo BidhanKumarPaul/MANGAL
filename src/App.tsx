@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { PHASE1_BUILD_DATA } from './data/generatedPhase1Project';
 import { TECH_STACK_DECISIONS, PHASE_ROADMAP } from './data/techStackAudit';
-import AndroidEmulatorWorkspace from './components/AndroidEmulatorWorkspace';
+import AndroidEmulatorWorkspace, { MangalAppIconSvg } from './components/AndroidEmulatorWorkspace';
 
 type TopNavTab = 'preview' | 'source' | 'stack' | 'release';
 type DeviceScreenRoute = 'voice_chat' | 'model_manager' | 'settings';
@@ -92,97 +92,13 @@ function MangalLogoBadge({
   showWordmark?: boolean;
 }) {
   return (
-    <div
-      style={{ width: size, height: size }}
-      className={`relative rounded-xl bg-[#120E0A] border border-[#3B2614] flex items-center justify-center overflow-hidden shrink-0 select-none ${
-        pulsing ? 'ring-2 ring-amber-400/80 shadow-lg shadow-amber-500/20' : ''
-      }`}
-    >
-      <svg
-        viewBox="0 0 512 512"
-        className="w-full h-full"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <defs>
-          <radialGradient id="mangalLogoGlow" cx="50%" cy="45%" r="42%">
-            <stop
-              offset="0%"
-              stopColor={pulsing ? '#F59E0B' : '#9A5B22'}
-              stopOpacity={pulsing ? '0.98' : '0.9'}
-            />
-            <stop offset="55%" stopColor="#4B290C" stopOpacity="0.55" />
-            <stop offset="100%" stopColor="#120E0A" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-        <rect width="512" height="512" rx="96" fill="#120E0A" />
-        <circle cx="256" cy="230" r="205" fill="url(#mangalLogoGlow)" />
-        {/* Outer Wave Arcs */}
-        <path
-          d="M123 108 C62 164 62 278 123 334"
-          stroke="#9A9183"
-          strokeWidth="13"
-          strokeLinecap="round"
-        />
-        <path
-          d="M389 108 C450 164 450 278 389 334"
-          stroke="#9A9183"
-          strokeWidth="13"
-          strokeLinecap="round"
-        />
-        {/* Middle Wave Arcs */}
-        <path
-          d="M156 138 C108 181 108 261 156 304"
-          stroke="#CFC5B4"
-          strokeWidth="13"
-          strokeLinecap="round"
-        />
-        <path
-          d="M356 138 C404 181 404 261 356 304"
-          stroke="#CFC5B4"
-          strokeWidth="13"
-          strokeLinecap="round"
-        />
-        {/* Inner Wave Arcs */}
-        <path
-          d="M192 171 C166 196 166 246 192 271"
-          stroke="#EFE6D5"
-          strokeWidth="13"
-          strokeLinecap="round"
-        />
-        <path
-          d="M320 171 C346 196 346 246 320 271"
-          stroke="#EFE6D5"
-          strokeWidth="13"
-          strokeLinecap="round"
-        />
-        {/* Capsule Microphone */}
-        <rect x="216" y="136" width="80" height="148" rx="40" fill="#EFE6D5" />
-        {/* Stand & Base */}
-        <path
-          d="M201 290 C214 320 234 332 256 332 C278 332 298 320 311 290"
-          stroke="#EFE6D5"
-          strokeWidth="13"
-          strokeLinecap="round"
-        />
-        <line x1="256" y1="306" x2="256" y2="338" stroke="#EFE6D5" strokeWidth="13" />
-        <line x1="216" y1="338" x2="296" y2="338" stroke="#EFE6D5" strokeWidth="13" />
-        {showWordmark && (
-          <text
-            x="256"
-            y="454"
-            textAnchor="middle"
-            fill="#CFC5B4"
-            fontFamily="Georgia, serif"
-            fontSize="36"
-            fontWeight="bold"
-            letterSpacing="14"
-          >
-            MANGAL
-          </text>
-        )}
-      </svg>
-    </div>
+    <MangalAppIconSvg
+      size={size}
+      pulsing={pulsing}
+      wakeTriggeredListening={pulsing}
+      rmsEnergy={pulsing ? 0.58 : 0.08}
+      showWordmark={showWordmark}
+    />
   );
 }
 

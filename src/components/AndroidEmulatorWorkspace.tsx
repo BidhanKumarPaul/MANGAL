@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { motion } from 'motion/react';
 import {
   Mic,
   Volume2,
@@ -108,17 +109,46 @@ interface ChatTurn {
 export function MangalAppIconSvg({
   size = 56,
   pulsing = false,
+  wakeTriggeredListening = false,
+  rmsEnergy = 0.08,
   showWordmark = false
 }: {
   size?: number;
   pulsing?: boolean;
+  wakeTriggeredListening?: boolean;
+  rmsEnergy?: number;
   showWordmark?: boolean;
 }) {
+  const isWakeActive = wakeTriggeredListening;
+  const energy = Math.max(0.05, Math.min(1, rmsEnergy));
+  const innerAmp = isWakeActive ? 1 + energy * 0.14 : pulsing ? 1.03 : 1;
+  const midAmp = isWakeActive ? 1 + energy * 0.18 : pulsing ? 1.04 : 1;
+  const outerAmp = isWakeActive ? 1 + energy * 0.22 : pulsing ? 1.05 : 1;
+
   return (
-    <div
+    <motion.div
       style={{ width: size, height: size }}
-      className={`relative rounded-[22%] bg-[#120E0A] border border-[#3B2614] flex items-center justify-center overflow-hidden shrink-0 select-none transition-transform ${
-        pulsing ? 'ring-2 ring-amber-400 shadow-lg shadow-amber-500/30 scale-105' : ''
+      animate={{
+        scale: isWakeActive ? [1, 1.06 + energy * 0.04, 1] : pulsing ? [1, 1.02, 1] : 1,
+        boxShadow: isWakeActive
+          ? [
+              '0 0 0px rgba(245, 158, 11, 0)',
+              `0 0 ${Math.round(18 + energy * 18)}px rgba(245, 158, 11, 0.55)`,
+              '0 0 6px rgba(245, 158, 11, 0.25)'
+            ]
+          : '0 0 0px rgba(0, 0, 0, 0)'
+      }}
+      transition={{
+        duration: isWakeActive ? 0.9 : 2.2,
+        repeat: Infinity,
+        ease: 'easeInOut'
+      }}
+      className={`relative rounded-[22%] bg-[#120E0A] border flex items-center justify-center overflow-hidden shrink-0 select-none ${
+        isWakeActive
+          ? 'border-amber-400 ring-2 ring-amber-400/70'
+          : pulsing
+          ? 'border-[#5C3A1B] ring-1 ring-amber-500/40'
+          : 'border-[#3B2614]'
       }`}
     >
       <svg
@@ -128,59 +158,256 @@ export function MangalAppIconSvg({
         xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
-          <radialGradient id="emulatorIconGlow" cx="50%" cy="45%" r="42%">
+          <radialGradient id="emulatorIconGlow" cx="50%" cy="45%" r="45%">
             <stop
               offset="0%"
-              stopColor={pulsing ? '#F59E0B' : '#9A5B22'}
-              stopOpacity={pulsing ? '0.98' : '0.92'}
+              stopColor={isWakeActive ? '#FBBF24' : pulsing ? '#F59E0B' : '#9A5B22'}
+              stopOpacity={isWakeActive ? '1' : pulsing ? '0.95' : '0.9'}
             />
-            <stop offset="55%" stopColor="#4B290C" stopOpacity="0.58" />
+            <stop
+              offset="55%"
+              stopColor={isWakeActive ? '#D97706' : '#4B290C'}
+              stopOpacity={isWakeActive ? '0.72' : '0.58'}
+            />
             <stop offset="100%" stopColor="#120E0A" stopOpacity="0" />
           </radialGradient>
         </defs>
         <rect width="512" height="512" rx="96" fill="#120E0A" />
-        <circle cx="256" cy="230" r="205" fill="url(#emulatorIconGlow)" />
-        {/* Outer Wave Arcs */}
-        <path
+
+        {/* Reactive Radial Halo Glow */}
+        <motion.circle
+          cx="256"
+          cy="230"
+          r="205"
+          fill="url(#emulatorIconGlow)"
+          animate={
+            isWakeActive
+              ? {
+                  scale: [0.92, 1.14 + energy * 0.12, 0.92],
+                  opacity: [0.8, 1, 0.8]
+                }
+              : pulsing
+              ? { scale: [0.97, 1.04, 0.97], opacity: [0.85, 0.95, 0.85] }
+              : { scale: 1, opacity: 0.9 }
+          }
+          transition={{
+            duration: isWakeActive ? 0.75 : 2.0,
+            repeat: Infinity,
+            ease: 'easeInOut'
+          }}
+          style={{ originX: '256px', originY: '230px' }}
+        />
+
+        {/* Expanding Sonic Ring Ripples in WAKE_TRIGGERED_LISTENING Mode */}
+        {isWakeActive && (
+          <>
+            <motion.circle
+              cx="256"
+              cy="218"
+              r="85"
+              stroke="#FBBF24"
+              strokeWidth="6"
+              fill="none"
+              initial={{ scale: 0.7, opacity: 0.75 }}
+              animate={{ scale: 2.35, opacity: 0 }}
+              transition={{
+                duration: 1.35,
+                repeat: Infinity,
+                ease: 'easeOut'
+              }}
+              style={{ originX: '256px', originY: '218px' }}
+            />
+            <motion.circle
+              cx="256"
+              cy="218"
+              r="85"
+              stroke="#F59E0B"
+              strokeWidth="4.5"
+              fill="none"
+              initial={{ scale: 0.7, opacity: 0.6 }}
+              animate={{ scale: 2.35, opacity: 0 }}
+              transition={{
+                duration: 1.35,
+                delay: 0.65,
+                repeat: Infinity,
+                ease: 'easeOut'
+              }}
+              style={{ originX: '256px', originY: '218px' }}
+            />
+          </>
+        )}
+
+        {/* Outer Wave Arcs (Staggered Phase 3) */}
+        <motion.path
           d="M123 108 C62 164 62 278 123 334"
-          stroke="#9A9183"
-          strokeWidth="13"
+          stroke={isWakeActive ? '#FBBF24' : '#9A9183'}
+          strokeWidth={isWakeActive ? 16 : 13}
           strokeLinecap="round"
+          animate={
+            isWakeActive
+              ? {
+                  x: [0, -10 - energy * 8, 0],
+                  scaleY: [1, outerAmp, 1],
+                  opacity: [0.45, 1, 0.45]
+                }
+              : pulsing
+              ? { x: [0, -3, 0], opacity: [0.7, 0.95, 0.7] }
+              : { x: 0, scaleY: 1, opacity: 0.85 }
+          }
+          transition={{
+            duration: isWakeActive ? 0.68 : 1.8,
+            delay: isWakeActive ? 0.24 : 0.3,
+            repeat: Infinity,
+            ease: 'easeInOut'
+          }}
+          style={{ originX: '123px', originY: '221px' }}
         />
-        <path
+        <motion.path
           d="M389 108 C450 164 450 278 389 334"
-          stroke="#9A9183"
-          strokeWidth="13"
+          stroke={isWakeActive ? '#FBBF24' : '#9A9183'}
+          strokeWidth={isWakeActive ? 16 : 13}
           strokeLinecap="round"
+          animate={
+            isWakeActive
+              ? {
+                  x: [0, 10 + energy * 8, 0],
+                  scaleY: [1, outerAmp, 1],
+                  opacity: [0.45, 1, 0.45]
+                }
+              : pulsing
+              ? { x: [0, 3, 0], opacity: [0.7, 0.95, 0.7] }
+              : { x: 0, scaleY: 1, opacity: 0.85 }
+          }
+          transition={{
+            duration: isWakeActive ? 0.68 : 1.8,
+            delay: isWakeActive ? 0.24 : 0.3,
+            repeat: Infinity,
+            ease: 'easeInOut'
+          }}
+          style={{ originX: '389px', originY: '221px' }}
         />
-        {/* Middle Wave Arcs */}
-        <path
+
+        {/* Middle Wave Arcs (Staggered Phase 2) */}
+        <motion.path
           d="M156 138 C108 181 108 261 156 304"
-          stroke="#CFC5B4"
-          strokeWidth="13"
+          stroke={isWakeActive ? '#FDE68A' : '#CFC5B4'}
+          strokeWidth={isWakeActive ? 15 : 13}
           strokeLinecap="round"
+          animate={
+            isWakeActive
+              ? {
+                  x: [0, -7 - energy * 6, 0],
+                  scaleY: [1, midAmp, 1],
+                  opacity: [0.6, 1, 0.6]
+                }
+              : pulsing
+              ? { x: [0, -2, 0], opacity: [0.8, 1, 0.8] }
+              : { x: 0, scaleY: 1, opacity: 0.92 }
+          }
+          transition={{
+            duration: isWakeActive ? 0.68 : 1.8,
+            delay: isWakeActive ? 0.12 : 0.15,
+            repeat: Infinity,
+            ease: 'easeInOut'
+          }}
+          style={{ originX: '156px', originY: '221px' }}
         />
-        <path
+        <motion.path
           d="M356 138 C404 181 404 261 356 304"
-          stroke="#CFC5B4"
-          strokeWidth="13"
+          stroke={isWakeActive ? '#FDE68A' : '#CFC5B4'}
+          strokeWidth={isWakeActive ? 15 : 13}
           strokeLinecap="round"
+          animate={
+            isWakeActive
+              ? {
+                  x: [0, 7 + energy * 6, 0],
+                  scaleY: [1, midAmp, 1],
+                  opacity: [0.6, 1, 0.6]
+                }
+              : pulsing
+              ? { x: [0, 2, 0], opacity: [0.8, 1, 0.8] }
+              : { x: 0, scaleY: 1, opacity: 0.92 }
+          }
+          transition={{
+            duration: isWakeActive ? 0.68 : 1.8,
+            delay: isWakeActive ? 0.12 : 0.15,
+            repeat: Infinity,
+            ease: 'easeInOut'
+          }}
+          style={{ originX: '356px', originY: '221px' }}
         />
-        {/* Inner Wave Arcs */}
-        <path
+
+        {/* Inner Wave Arcs (Staggered Phase 1 — Closest to Microphone Capsule) */}
+        <motion.path
           d="M192 171 C166 196 166 246 192 271"
-          stroke="#EFE6D5"
-          strokeWidth="13"
+          stroke={isWakeActive ? '#FEF3C7' : '#EFE6D5'}
+          strokeWidth={isWakeActive ? 15 : 13}
           strokeLinecap="round"
+          animate={
+            isWakeActive
+              ? {
+                  x: [0, -4 - energy * 4, 0],
+                  scaleY: [1, innerAmp, 1],
+                  opacity: [0.75, 1, 0.75]
+                }
+              : pulsing
+              ? { scaleY: [1, 1.03, 1] }
+              : { x: 0, scaleY: 1, opacity: 1 }
+          }
+          transition={{
+            duration: isWakeActive ? 0.68 : 1.8,
+            delay: 0,
+            repeat: Infinity,
+            ease: 'easeInOut'
+          }}
+          style={{ originX: '192px', originY: '221px' }}
         />
-        <path
+        <motion.path
           d="M320 171 C346 196 346 246 320 271"
-          stroke="#EFE6D5"
-          strokeWidth="13"
+          stroke={isWakeActive ? '#FEF3C7' : '#EFE6D5'}
+          strokeWidth={isWakeActive ? 15 : 13}
           strokeLinecap="round"
+          animate={
+            isWakeActive
+              ? {
+                  x: [0, 4 + energy * 4, 0],
+                  scaleY: [1, innerAmp, 1],
+                  opacity: [0.75, 1, 0.75]
+                }
+              : pulsing
+              ? { scaleY: [1, 1.03, 1] }
+              : { x: 0, scaleY: 1, opacity: 1 }
+          }
+          transition={{
+            duration: isWakeActive ? 0.68 : 1.8,
+            delay: 0,
+            repeat: Infinity,
+            ease: 'easeInOut'
+          }}
+          style={{ originX: '320px', originY: '221px' }}
         />
-        {/* Capsule Microphone */}
-        <rect x="216" y="136" width="80" height="148" rx="40" fill="#EFE6D5" />
+
+        {/* Capsule Microphone Core */}
+        <motion.rect
+          x="216"
+          y="136"
+          width="80"
+          height="148"
+          rx="40"
+          fill={isWakeActive ? '#FFFBEB' : '#EFE6D5'}
+          animate={
+            isWakeActive
+              ? { scaleY: [1, 1.04 + energy * 0.05, 1], scaleX: [1, 1.02, 1] }
+              : { scaleY: 1, scaleX: 1 }
+          }
+          transition={{
+            duration: 0.55,
+            repeat: Infinity,
+            ease: 'easeInOut'
+          }}
+          style={{ originX: '256px', originY: '210px' }}
+        />
+
         {/* Stand & Base */}
         <path
           d="M201 290 C214 320 234 332 256 332 C278 332 298 320 311 290"
@@ -195,7 +422,7 @@ export function MangalAppIconSvg({
             x="256"
             y="454"
             textAnchor="middle"
-            fill="#CFC5B4"
+            fill={isWakeActive ? '#FDE68A' : '#CFC5B4'}
             fontFamily="Georgia, serif"
             fontSize="36"
             fontWeight="bold"
@@ -205,7 +432,7 @@ export function MangalAppIconSvg({
           </text>
         )}
       </svg>
-    </div>
+    </motion.div>
   );
 }
 
@@ -875,6 +1102,20 @@ export default function AndroidEmulatorWorkspace({
       Object.values(timers).forEach((id) => window.clearInterval(id));
     };
   }, []);
+
+  // Reactive RMS acoustic modulation when in WAKE_TRIGGERED_LISTENING mode
+  useEffect(() => {
+    const isWakeListening =
+      wakeTriggeredListening || continuousRealMicActive || awaitingFollowUpAfterMangal;
+    if (!isWakeListening) {
+      setRmsEnergy(0.08);
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      setRmsEnergy(0.28 + Math.abs(Math.sin(Date.now() / 180)) * 0.55 + Math.random() * 0.15);
+    }, 140);
+    return () => window.clearInterval(intervalId);
+  }, [wakeTriggeredListening, continuousRealMicActive, awaitingFollowUpAfterMangal]);
 
   // REAL-TIME STREAMING MODEL DOWNLOADER WITH LIVE PROGRESS BAR, SPEED, PAUSE & RESUME
   const startOrResumeModelDownload = (model: SimulatedModel) => {
@@ -1572,13 +1813,19 @@ export default function AndroidEmulatorWorkspace({
                           <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-2.5 min-w-0">
                               <MangalAppIconSvg
-                                size={38}
+                                size={42}
                                 pulsing={
                                   wakeTriggeredListening ||
                                   continuousRealMicActive ||
                                   awaitingFollowUpAfterMangal ||
                                   wakeServiceRunning
                                 }
+                                wakeTriggeredListening={
+                                  wakeTriggeredListening ||
+                                  continuousRealMicActive ||
+                                  awaitingFollowUpAfterMangal
+                                }
+                                rmsEnergy={rmsEnergy}
                               />
                               <div className="min-w-0">
                                 <div className="flex items-center gap-1.5">
@@ -2359,10 +2606,36 @@ export default function AndroidEmulatorWorkspace({
               </h2>
               <p className="text-xs text-slate-400">
                 Test the new <strong>Live Download Progress Bar</strong>, the{' '}
-                <strong>Custom GGUF Model Selector</strong>, and continuous{' '}
-                <strong>&ldquo;Mangal&rdquo;</strong> voice listening.
+                <strong>Custom GGUF Model Selector</strong>, and reactive{' '}
+                <strong>WAKE_TRIGGERED_LISTENING</strong> logo wave animation.
               </p>
             </div>
+            <button
+              onClick={() => {
+                setOsView('MANGAL_APP');
+                setMangalTab('voice_chat');
+                setWakeTriggeredListening((prev) => !prev);
+                setAwaitingFollowUpAfterMangal((prev) => !prev);
+                playWakeEarcon();
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors ${
+                wakeTriggeredListening || awaitingFollowUpAfterMangal
+                  ? 'bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/25'
+                  : 'bg-slate-950 border border-amber-500/50 text-amber-300 hover:bg-amber-500/10'
+              }`}
+            >
+              <MangalAppIconSvg
+                size={22}
+                pulsing
+                wakeTriggeredListening={wakeTriggeredListening || awaitingFollowUpAfterMangal}
+                rmsEnergy={rmsEnergy}
+              />
+              <span>
+                {wakeTriggeredListening || awaitingFollowUpAfterMangal
+                  ? 'WAKE_TRIGGERED_LISTENING: ON'
+                  : 'Preview WAKE_TRIGGERED_LISTENING Waves'}
+              </span>
+            </button>
           </div>
 
           {/* Direct Jump to the 4 Upgraded App Screens */}

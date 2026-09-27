@@ -217,6 +217,8 @@ def run_verification():
                 close_b = txt.count("}")
                 if open_b != close_b:
                     syntax_errors.append(f"{rel}: unbalanced braces ({open_b} vs {close_b})")
+                if "text = msg.toolPayloadJson" in txt or "text = msg.toolName" in txt:
+                    syntax_errors.append(f"{rel}: cross-module smart cast on ChatMessageEntity nullable property")
 
     checks.append({
         "id": "global-ast-brace-audit",

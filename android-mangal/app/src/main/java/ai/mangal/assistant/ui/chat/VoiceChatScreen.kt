@@ -161,7 +161,9 @@ fun VoiceChatScreen(
                         ) {
                             MangalBrandLogo(
                                 size = 46.dp,
-                                isPulsingWake = isActivelyCapturing || (handsFreeEnabled && micGranted)
+                                isPulsingWake = isActivelyCapturing || (handsFreeEnabled && micGranted),
+                                isWakeTriggeredListening = isActivelyCapturing,
+                                rmsLevel = rmsLevel
                             )
                             Column {
                                 Row(
@@ -392,9 +394,10 @@ fun VoiceChatScreen(
                                     fontWeight = FontWeight.Bold,
                                     color = if (isUser) MangalAmberLight else MangalEmeraldAccent
                                 )
-                                if (!msg.toolName.isNullOrBlank()) {
+                                val toolName = msg.toolName
+                                if (!toolName.isNullOrBlank()) {
                                     Text(
-                                        text = "TOOL: ${msg.toolName}",
+                                        text = "TOOL: $toolName",
                                         fontSize = 10.sp,
                                         fontFamily = FontFamily.Monospace,
                                         color = MangalAmberPrimary
@@ -402,7 +405,8 @@ fun VoiceChatScreen(
                                 }
                             }
 
-                            if (!msg.toolPayloadJson.isNullOrBlank()) {
+                            val toolPayload = msg.toolPayloadJson
+                            if (!toolPayload.isNullOrBlank()) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -411,7 +415,7 @@ fun VoiceChatScreen(
                                         .padding(8.dp)
                                 ) {
                                     Text(
-                                        text = msg.toolPayloadJson,
+                                        text = toolPayload.orEmpty(),
                                         fontSize = 10.sp,
                                         fontFamily = FontFamily.Monospace,
                                         color = MangalTextSecondary
